@@ -4,8 +4,10 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.webrtc.*
 import java.util.concurrent.Executors
@@ -49,8 +51,9 @@ class WebRtcSessionManager(
     var onCommandReceived: ((String) -> Unit)? = null
     var onRemoteSnapshotRequested: (() -> Unit)? = null
 
-    // STUN Servers for cellular / mobile carrier NAT traversal
+    // STUN and TURN Relay Servers for inter-city, cellular 4G/5G and cross-NAT streaming
     private val iceServers = listOf(
+        // Google Global STUN
         PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
         PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer(),
         PeerConnection.IceServer.builder("stun:stun2.l.google.com:19302").createIceServer(),
@@ -58,8 +61,35 @@ class WebRtcSessionManager(
         PeerConnection.IceServer.builder("stun:stun4.l.google.com:19302").createIceServer(),
         PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer(),
         PeerConnection.IceServer.builder("stun:global.stun.twilio.com:3478").createIceServer(),
-        PeerConnection.IceServer.builder("stun:stun.services.mozilla.com").createIceServer(),
-        PeerConnection.IceServer.builder("stun:stun.matrix.org:3478").createIceServer()
+        // OpenRelay Free Global TURN Servers (for inter-city CGNAT & Wi-Fi router relay)
+        PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80")
+            .setUsername("openrelay")
+            .setPassword("openrelay")
+            .createIceServer(),
+        PeerConnection.IceServer.builder("turn:openrelay.metered.ca:443")
+            .setUsername("openrelay")
+            .setPassword("openrelay")
+            .createIceServer(),
+        PeerConnection.IceServer.builder("turn:openrelay.metered.ca:443?transport=tcp")
+            .setUsername("openrelay")
+            .setPassword("openrelay")
+            .createIceServer(),
+        PeerConnection.IceServer.builder("turns:openrelay.metered.ca:443?transport=tcp")
+            .setUsername("openrelay")
+            .setPassword("openrelay")
+            .createIceServer(),
+        PeerConnection.IceServer.builder("turn:relay.metered.ca:80")
+            .setUsername("openrelay")
+            .setPassword("openrelay")
+            .createIceServer(),
+        PeerConnection.IceServer.builder("turn:relay.metered.ca:443")
+            .setUsername("openrelay")
+            .setPassword("openrelay")
+            .createIceServer(),
+        PeerConnection.IceServer.builder("turn:relay.metered.ca:443?transport=tcp")
+            .setUsername("openrelay")
+            .setPassword("openrelay")
+            .createIceServer()
     )
 
     private val pendingIceCandidates = java.util.Collections.synchronizedList(mutableListOf<IceCandidate>())
@@ -117,17 +147,46 @@ class WebRtcSessionManager(
         if (isCameraMode) {
             setupCameraMediaTracks(isFrontCamera)
             createAndSendOffer(roomId)
+
+            // Periodically re-broadcast offer if viewer hasn't completed handshake yet
+            scope.launch(Dispatchers.IO) {
+                while (scope.isActive) {
+                    delay(4000)
+                    if (_connectionState.value != WebRtcConnectionState.CONNECTED) {
+                        val localDesc = peerConnection?.localDescription
+                        if (localDesc != null && localDesc.type == SessionDescription.Type.OFFER) {
+                            signalingClient?.sendMessage(
+                                SignalingMessage(
+                                    type = "OFFER",
+                                    senderId = "CAMERA",
+                                    targetRoom = roomId,
+                                    sdp = localDesc.description,
+                                    sdpType = localDesc.type.canonicalForm()
+                                )
+                            )
+                        }
+                    }
+                }
+            }
         } else {
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
             _statusText.value = "Waiting for Camera video stream on 4G/5G..."
-            // Send a ping to notify camera to produce an offer
-            signalingClient?.sendMessage(
-                SignalingMessage(
-                    type = "ROOM_JOINED",
-                    senderId = "VIEWER",
-                    targetRoom = roomId
-                )
-            )
+
+            // Send periodic ROOM_JOINED pings to camera across cities until connected
+            scope.launch(Dispatchers.IO) {
+                while (scope.isActive) {
+                    if (_connectionState.value != WebRtcConnectionState.CONNECTED) {
+                        signalingClient?.sendMessage(
+                            SignalingMessage(
+                                type = "ROOM_JOINED",
+                                senderId = "VIEWER",
+                                targetRoom = roomId
+                            )
+                        )
+                    }
+                    delay(2000)
+                }
+            }
         }
     }
 

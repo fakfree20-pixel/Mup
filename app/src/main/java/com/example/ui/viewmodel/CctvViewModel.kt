@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.camera.AudioStreamManager
 import com.example.camera.BatteryMonitor
 import com.example.camera.CameraManager
+import com.example.camera.CctvForegroundService
 import com.example.data.db.AppDatabase
 import com.example.data.model.AppRole
 import com.example.data.model.CameraLens
@@ -190,6 +191,17 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     fun startCameraMode(lifecycleOwner: LifecycleOwner, previewView: PreviewView? = null) {
         _cameraIp.value = CctvHttpServer.getLocalIpAddress()
         batteryMonitor?.start()
+
+        // Start Foreground Service with Persistent Notification & WakeLock for 24/7 background streaming
+        try {
+            CctvForegroundService.startService(
+                context = getApplication(),
+                roomPin = _cameraRoomPin.value,
+                camId = _cameraId.value
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not start CctvForegroundService: ${e.message}")
+        }
 
         // 1. Setup CameraX for local display & motion analysis
         cameraManager.startCamera(lifecycleOwner, previewView) {
@@ -405,6 +417,9 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopCameraMode() {
+        try {
+            CctvForegroundService.stopService(getApplication())
+        } catch (_: Exception) {}
         discovery.stopBroadcasting()
         httpServer?.stop()
         httpServer = null

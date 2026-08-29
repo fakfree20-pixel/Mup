@@ -53,6 +53,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import android.app.PictureInPictureParams
+import android.os.Build
+import android.util.Rational
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -159,11 +166,7 @@ fun CameraModeScreen(
         }
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            viewModel.stopCameraMode()
-        }
-    }
+    // Note: Camera mode is explicitly stopped only when user clicks Stop Camera button
 
     Box(
         modifier = Modifier
@@ -557,6 +560,52 @@ fun CameraModeScreen(
                             modifier = Modifier.size(22.dp)
                         )
                     }
+                }
+
+                // Run in Background & Multitask Button
+                Button(
+                    onClick = {
+                        viewModel.showToast(AppStrings.backgroundActiveToast(language))
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            try {
+                                val params = PictureInPictureParams.Builder()
+                                    .setAspectRatio(Rational(16, 9))
+                                    .build()
+                                val entered = activity?.enterPictureInPictureMode(params) ?: false
+                                if (!entered) {
+                                    activity?.moveTaskToBack(true)
+                                }
+                            } catch (_: Exception) {
+                                activity?.moveTaskToBack(true)
+                            }
+                        } else {
+                            activity?.moveTaskToBack(true)
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                        .testTag("run_in_background_btn"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CctvNavyPrimary,
+                        contentColor = Color.White
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, CctvPrimaryCyan)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Apps,
+                        contentDescription = null,
+                        tint = CctvPrimaryCyan,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = AppStrings.runInBackgroundBtn(language),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
                 }
 
                 // Primary Bottom Buttons (Power Saver & Stop Camera)

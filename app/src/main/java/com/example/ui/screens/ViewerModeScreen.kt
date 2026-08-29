@@ -57,6 +57,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -127,6 +128,7 @@ fun ViewerModeScreen(
     val roomPinInput by viewModel.viewerRoomPinInput.collectAsState()
     val isViewerWebRtcActive by viewModel.isViewerWebRtcActive.collectAsState()
     val isViewerMicTalking by viewModel.isViewerMicTalking.collectAsState()
+    val webRtcStatus by viewModel.webRtcStatus.collectAsState()
 
     val webRtcSession = viewModel.viewerWebRtcSession
     val webRtcVideoTrack by (webRtcSession?.remoteVideoTrack?.collectAsState() ?: remember { mutableStateOf(null) })
@@ -415,6 +417,74 @@ fun ViewerModeScreen(
                                     fontWeight = FontWeight.Bold,
                                     color = CctvIceBlue
                                 )
+                            }
+                        }
+
+                        // Live Inter-City Connection Progress & Diagnostic Status
+                        if (isViewerWebRtcActive && isAnyConnecting) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = CctvNavyPrimary.copy(alpha = 0.3f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, CctvPrimaryCyan.copy(alpha = 0.4f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                color = CctvPrimaryCyan,
+                                                strokeWidth = 2.dp
+                                            )
+                                            Text(
+                                                text = if (language == AppLanguage.HINDI) "दूसरे शहर के कैमरे से जुड़ रहे हैं..." else "Connecting across cities...",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                color = Color.White
+                                            )
+                                        }
+
+                                        Text(
+                                            text = "PIN: $roomPinInput",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = CctvPrimaryCyan
+                                        )
+                                    }
+
+                                    Text(
+                                        text = webRtcStatus,
+                                        fontSize = 12.sp,
+                                        color = CctvIceBlue,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        TextButton(
+                                            onClick = { viewModel.disconnectWebRtc() }
+                                        ) {
+                                            Text(
+                                                text = if (language == AppLanguage.HINDI) "रद्द करें / दोबारा प्रयास करें" else "Cancel / Retry",
+                                                color = CctvAlertRed,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     } else {

@@ -32,22 +32,23 @@ class WebRtcSignalingClient(
     private val TAG = "WebRtcSignaling"
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
+        .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS) // For WebSocket
-        .writeTimeout(8, TimeUnit.SECONDS)
+        .writeTimeout(6, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
     private val pollingClient = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(8, TimeUnit.SECONDS)
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(6, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
     private var webSocket: WebSocket? = null
     private var isRunning = false
     private var pollingJob: Job? = null
+    private var backupPollingJob: Job? = null
     private val processedMessageHashes = Collections.synchronizedSet(mutableSetOf<String>())
 
     // Room topics:
@@ -62,15 +63,16 @@ class WebRtcSignalingClient(
     fun start(scope: CoroutineScope) {
         if (isRunning) return
         isRunning = true
-        onStateChanged?.invoke("Connecting to 4G/5G room $cleanRoom...")
+        onStateChanged?.invoke("Connecting to Cloud Relay Room $cleanRoom...")
 
         connectWebSocket(scope)
         startHttpPollingFallback(scope)
+        startBackupRelayPolling(scope)
 
         // Heartbeat / ping job to keep signaling channel warm
         scope.launch(Dispatchers.IO) {
             while (isRunning && isActive) {
-                delay(12000)
+                delay(6000)
                 if (isRunning) {
                     sendMessage(
                         SignalingMessage(
@@ -93,7 +95,7 @@ class WebRtcSignalingClient(
         webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d(TAG, "Signaling WebSocket opened for topic: $listenTopic")
-                onStateChanged?.invoke("Signaling channel connected")
+                onStateChanged?.invoke("Connected to Cloud Relay")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -112,10 +114,10 @@ class WebRtcSignalingClient(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.w(TAG, "Signaling WS failed: ${t.message}. Retrying...")
+                Log.w(TAG, "Signaling WS failed: ${t.message}. Retrying in 2s...")
                 if (isRunning) {
                     scope.launch(Dispatchers.IO) {
-                        delay(3000)
+                        delay(2000)
                         if (isRunning) {
                             connectWebSocket(scope)
                         }
@@ -161,6 +163,40 @@ class WebRtcSignalingClient(
                 } catch (_: Exception) {
                     // Ignore network hiccups, wait before polling again
                 }
+                delay(1500)
+            }
+        }
+    }
+
+    // Secondary backup relay via Dweet for guaranteed inter-city SDP delivery
+    private fun startBackupRelayPolling(scope: CoroutineScope) {
+        backupPollingJob = scope.launch(Dispatchers.IO) {
+            while (isActive && isRunning) {
+                try {
+                    val dweetUrl = "https://dweet.cc/get/latest/dweet/for/$listenTopic"
+                    val request = Request.Builder().url(dweetUrl).build()
+                    val response = pollingClient.newCall(request).execute()
+                    if (response.isSuccessful && response.body != null) {
+                        val bodyString = response.body!!.string()
+                        val root = JSONObject(bodyString)
+                        if (root.optString("this") == "succeeded") {
+                            val withArray = root.optJSONArray("with")
+                            if (withArray != null && withArray.length() > 0) {
+                                val firstItem = withArray.getJSONObject(0)
+                                val content = firstItem.optJSONObject("content")
+                                if (content != null) {
+                                    val rawPayload = content.optString("payload")
+                                    if (rawPayload.isNotBlank()) {
+                                        parseAndDispatch(rawPayload)
+                                    } else {
+                                        parseAndDispatch(content.toString())
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    response.close()
+                } catch (_: Exception) {}
                 delay(2000)
             }
         }
@@ -176,7 +212,9 @@ class WebRtcSignalingClient(
             if (sender == clientRole) return
 
             // Deduplication by signature
-            val sig = "$type:$sender:${json.optString("candidate").take(25)}:${json.optString("sdp").take(25)}"
+            val candidateSnippet = json.optString("candidate").take(30)
+            val sdpSnippet = json.optString("sdp").take(30)
+            val sig = "$type:$sender:$candidateSnippet:$sdpSnippet"
             if (!processedMessageHashes.add(sig)) {
                 return // Already processed
             }
@@ -215,8 +253,11 @@ class WebRtcSignalingClient(
                 put("timestamp", msg.timestamp)
             }
 
+            val jsonString = json.toString()
+
+            // 1. Send via primary ntfy.sh channel
             val postUrl = "https://ntfy.sh/$sendTopic"
-            val requestBody = json.toString().toRequestBody("text/plain".toMediaType())
+            val requestBody = jsonString.toRequestBody("text/plain; charset=utf-8".toMediaType())
             val request = Request.Builder()
                 .url(postUrl)
                 .post(requestBody)
@@ -224,13 +265,28 @@ class WebRtcSignalingClient(
 
             httpClient.newCall(request).enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
-                    Log.w(TAG, "Failed to POST signaling message: ${e.message}")
+                    Log.w(TAG, "Failed to POST ntfy signaling: ${e.message}")
                 }
-
                 override fun onResponse(call: Call, response: Response) {
                     response.close()
                 }
             })
+
+            // 2. For critical OFFER / ANSWER / ROOM_JOINED messages, also post to secondary Dweet relay
+            if (msg.type == "OFFER" || msg.type == "ANSWER" || msg.type == "ROOM_JOINED" || msg.type == "ICE_CANDIDATE") {
+                val dweetUrl = "https://dweet.cc/dweet/for/$sendTopic"
+                val dweetBodyObj = JSONObject().apply {
+                    put("payload", jsonString)
+                }
+                val dweetBody = dweetBodyObj.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                val dweetReq = Request.Builder().url(dweetUrl).post(dweetBody).build()
+                httpClient.newCall(dweetReq).enqueue(object : Callback {
+                    override fun onFailure(call: Call, e: IOException) {}
+                    override fun onResponse(call: Call, response: Response) {
+                        response.close()
+                    }
+                })
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error packaging signaling message", e)
         }
@@ -240,6 +296,8 @@ class WebRtcSignalingClient(
         isRunning = false
         pollingJob?.cancel()
         pollingJob = null
+        backupPollingJob?.cancel()
+        backupPollingJob = null
         try {
             webSocket?.close(1000, "Normal closure")
         } catch (_: Exception) {}
