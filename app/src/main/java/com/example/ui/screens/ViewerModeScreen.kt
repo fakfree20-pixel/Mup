@@ -297,7 +297,7 @@ fun ViewerModeScreen(
                                             tint = if (viewerModeTab == "WEBRTC") CctvIceBlue else CctvTextSecondary
                                         )
                                         Text(
-                                            text = if (language == AppLanguage.HINDI) "मोबाइल डेटा (4G/5G)" else "Mobile Data (4G/5G)",
+                                            text = if (language == AppLanguage.HINDI) "इंटरनेट (Data/Wi-Fi)" else "Internet (Data/Wi-Fi)",
                                             fontSize = 12.sp,
                                             fontWeight = if (viewerModeTab == "WEBRTC") FontWeight.Bold else FontWeight.Normal,
                                             color = if (viewerModeTab == "WEBRTC") CctvIceBlue else CctvTextSecondary
@@ -335,7 +335,7 @@ fun ViewerModeScreen(
                     if (viewerModeTab == "WEBRTC") {
                         // --- WEBRTC MOBILE DATA SECTION ---
                         Text(
-                            text = if (language == AppLanguage.HINDI) "📱 दोनों मोबाइल अपने-अपने मोबाइल डेटा (4G/5G) पर चलेंगे" else "📱 Stream between any two phones over mobile data",
+                            text = if (language == AppLanguage.HINDI) "📱 कोई भी इंटरनेट (मोबाइल डेटा हो या Wi-Fi) इस्तेमाल करें" else "📱 Stream between any two phones over Internet (Data or Wi-Fi)",
                             style = MaterialTheme.typography.bodySmall.copy(
                                 color = CctvPrimaryCyan,
                                 fontSize = 12.sp,

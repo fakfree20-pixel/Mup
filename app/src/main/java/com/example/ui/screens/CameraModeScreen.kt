@@ -287,7 +287,7 @@ fun CameraModeScreen(
                                             modifier = Modifier.testTag("camera_pin_display")
                                         )
                                         Text(
-                                            text = "(4G/5G P2P)",
+                                            text = "(Internet P2P)",
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = CctvSuccessGreen

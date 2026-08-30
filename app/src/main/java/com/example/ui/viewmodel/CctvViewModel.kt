@@ -521,7 +521,11 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
 
     // 2. Connect via Local Wi-Fi / Hotspot LAN
     fun connectToCamera(targetInput: String) {
-        var trimmed = targetInput.trim()
+        var trimmed = targetInput
+            .replace('\u00A0', ' ') // Replace non-breaking space
+            .replace('\u202F', ' ') // Replace narrow no-break space
+            .trim()
+
         if (trimmed.isBlank()) {
             showToast("Please enter a valid Camera ID or IP address")
             return
@@ -529,11 +533,8 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
 
         // Clean any prefixes like "LAN IP:", "IP:", "http://", "https://"
         trimmed = trimmed
-            .replace("LAN IP:", "", ignoreCase = true)
-            .replace("LAN IP", "", ignoreCase = true)
-            .replace("IP:", "", ignoreCase = true)
-            .replace("http://", "", ignoreCase = true)
-            .replace("https://", "", ignoreCase = true)
+            .replace(Regex("(?i)^(lan\\s*ip|ip)\\s*:?\\s*"), "")
+            .replace(Regex("(?i)^https?://"), "")
             .trim()
 
         disconnectWebRtc()
@@ -549,13 +550,31 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         if (match != null) {
             host = match.host
             port = match.port
-        } else if (trimmed.contains(":")) {
-            val parts = trimmed.split(":")
-            host = parts[0].trim()
-            port = parts.getOrNull(1)?.trim()?.toIntOrNull() ?: 8080
         } else {
-            host = trimmed
-            port = 8080
+            // Check for IPv6 vs IPv4 with port
+            val lastColon = trimmed.lastIndexOf(':')
+            if (lastColon > 0 && lastColon == trimmed.indexOf(':')) {
+                // Single colon -> IPv4 with port (e.g. 192.168.1.5:8080)
+                host = trimmed.substring(0, lastColon).trim()
+                port = trimmed.substring(lastColon + 1).trim().toIntOrNull() ?: 8080
+            } else if (lastColon > 0 && trimmed.startsWith("[") && trimmed.contains("]:")) {
+                // IPv6 with port (e.g. [2001:db8::1]:8080)
+                val endBracket = trimmed.indexOf("]:")
+                host = trimmed.substring(1, endBracket).trim()
+                port = trimmed.substring(endBracket + 2).trim().toIntOrNull() ?: 8080
+            } else if (lastColon > 0 && trimmed.count { it == ':' } > 1 && !trimmed.contains(".")) {
+                 // IPv6 without brackets or port (e.g. 2001:db8::1)
+                 host = trimmed
+                 port = 8080
+            } else if (lastColon > 0) {
+                 // Fallback for standard domain/IPv4 with port
+                 host = trimmed.substring(0, lastColon).trim()
+                 port = trimmed.substring(lastColon + 1).trim().toIntOrNull() ?: 8080
+            } else {
+                // Just host/IP
+                host = trimmed
+                port = 8080
+            }
         }
 
         if (host.isBlank()) {

@@ -60,9 +60,9 @@ object AppStrings {
     fun noSnapshots(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "अभी कोई स्नैपशॉट नहीं है" else "No snapshots yet"
 
     // WebRTC & Mobile Data Connection
-    fun webrtcRoomCode(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "मोबाइल डेटा रूम कोड (WebRTC PIN):" else "Mobile Data Room PIN (WebRTC):"
-    fun webrtcRoomCodeHint(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "दूसरे मोबाइल में यह 6-अंकों का कोड डालकर 4G/5G पर कहीं से भी लाइव देखें" else "Enter this 6-digit PIN on the viewer device to stream over 4G/5G from anywhere"
-    fun webrtcTab(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "🌐 मोबाइल डेटा (WebRTC 4G/5G)" else "🌐 Mobile Data (WebRTC)"
+    fun webrtcRoomCode(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "इंटरनेट रूम कोड (PIN):" else "Internet Room PIN:"
+    fun webrtcRoomCodeHint(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "दूसरे मोबाइल में यह 6-अंकों का कोड डालकर दुनिया में कहीं से भी (Data/Wi-Fi) लाइव देखें" else "Enter this 6-digit PIN on the viewer device to stream from anywhere via Internet"
+    fun webrtcTab(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "🌐 इंटरनेट (Data/Wi-Fi)" else "🌐 Internet (Data/Wi-Fi)"
     fun lanTab(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "📶 लोकल वाई-फ़ाई / हॉटस्पॉट" else "📶 Local Wi-Fi / Hotspot"
     fun webrtcPinPlaceholder(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "6-अंकों का रूम कोड दर्ज करें (e.g. 786 123)" else "Enter 6-digit Room PIN (e.g. 786 123)"
     fun webrtcConnecting(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "WebRTC P2P से कनेक्ट हो रहा है..." else "Connecting via WebRTC P2P..."

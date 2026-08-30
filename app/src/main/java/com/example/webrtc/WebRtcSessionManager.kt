@@ -60,8 +60,8 @@ class WebRtcSessionManager(
         PeerConnection.IceServer.builder("stun:stun3.l.google.com:19302").createIceServer(),
         PeerConnection.IceServer.builder("stun:stun4.l.google.com:19302").createIceServer(),
         PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer(),
-        PeerConnection.IceServer.builder("stun:global.stun.twilio.com:3478").createIceServer(),
-        // OpenRelay Free Global TURN Servers (for inter-city CGNAT & Wi-Fi router relay)
+        PeerConnection.IceServer.builder("stun:global.stun.twilio.com:3478?transport=udp").createIceServer(),
+        // Free Global TURN Servers (for inter-city CGNAT & Wi-Fi router relay)
         PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80")
             .setUsername("openrelayproject")
             .setPassword("openrelayproject")
@@ -78,27 +78,8 @@ class WebRtcSessionManager(
             .setUsername("openrelayproject")
             .setPassword("openrelayproject")
             .createIceServer(),
-        PeerConnection.IceServer.builder("turn:relay.metered.ca:80")
-            .setUsername("openrelayproject")
-            .setPassword("openrelayproject")
-            .createIceServer(),
-        PeerConnection.IceServer.builder("turn:relay.metered.ca:443")
-            .setUsername("openrelayproject")
-            .setPassword("openrelayproject")
-            .createIceServer(),
-        PeerConnection.IceServer.builder("turn:relay.metered.ca:443?transport=tcp")
-            .setUsername("openrelayproject")
-            .setPassword("openrelayproject")
-            .createIceServer(),
-        // Static Auth endpoints for extra redundancy
-        PeerConnection.IceServer.builder("turn:staticauth.openrelay.metered.ca:80")
-            .setUsername("openrelayproject")
-            .setPassword("openrelayprojectsecret")
-            .createIceServer(),
-        PeerConnection.IceServer.builder("turn:staticauth.openrelay.metered.ca:443")
-            .setUsername("openrelayproject")
-            .setPassword("openrelayprojectsecret")
-            .createIceServer()
+        // Twilio network traversal STUN over TCP (fallback for strict firewalls)
+        PeerConnection.IceServer.builder("stun:global.stun.twilio.com:3478?transport=tcp").createIceServer()
     )
 
     private val pendingIceCandidates = java.util.Collections.synchronizedList(mutableListOf<IceCandidate>())
@@ -169,7 +150,7 @@ class WebRtcSessionManager(
                                     type = "OFFER",
                                     senderId = "CAMERA",
                                     targetRoom = roomId,
-                                    sdp = localDesc.description,
+                                    sdp = minifySdp(localDesc.description),
                                     sdpType = localDesc.type.canonicalForm()
                                 )
                             )
@@ -422,7 +403,7 @@ class WebRtcSessionManager(
                             type = "OFFER",
                             senderId = "CAMERA",
                             targetRoom = roomId,
-                            sdp = sessionDescription.description,
+                            sdp = minifySdp(sessionDescription.description),
                             sdpType = sessionDescription.type.canonicalForm()
                         )
                         signalingClient?.sendMessage(msg)
@@ -455,7 +436,7 @@ class WebRtcSessionManager(
                             type = "OFFER",
                             senderId = "CAMERA",
                             targetRoom = msg.targetRoom.ifBlank { "" },
-                            sdp = localDesc.description,
+                            sdp = minifySdp(localDesc.description),
                             sdpType = localDesc.type.canonicalForm()
                         )
                         signalingClient?.sendMessage(offerMsg)
@@ -571,7 +552,7 @@ class WebRtcSessionManager(
                             type = "ANSWER",
                             senderId = "VIEWER",
                             targetRoom = "",
-                            sdp = sessionDescription.description,
+                            sdp = minifySdp(sessionDescription.description),
                             sdpType = sessionDescription.type.canonicalForm()
                         )
                         signalingClient?.sendMessage(msg)
@@ -668,5 +649,8 @@ class WebRtcSessionManager(
         } catch (e: Exception) {
             Log.w(TAG, "Error releasing WebRTC resources", e)
         }
+    }
+    private fun minifySdp(sdp: String): String {
+        return sdp.lines().filter { !it.trim().startsWith("a=extmap:") }.joinToString("\r\n") + "\r\n"
     }
 }
