@@ -52,19 +52,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        if (viewModel.currentRole.value == AppRole.CAMERA_DEVICE) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                try {
-                    val params = PictureInPictureParams.Builder()
-                        .setAspectRatio(Rational(16, 9))
-                        .build()
-                    enterPictureInPictureMode(params)
-                } catch (_: Exception) {}
-            }
-        }
-    }
+
 }
 
 @Composable

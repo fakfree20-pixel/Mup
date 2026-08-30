@@ -63,32 +63,41 @@ class WebRtcSessionManager(
         PeerConnection.IceServer.builder("stun:global.stun.twilio.com:3478").createIceServer(),
         // OpenRelay Free Global TURN Servers (for inter-city CGNAT & Wi-Fi router relay)
         PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80")
-            .setUsername("openrelay")
-            .setPassword("openrelay")
+            .setUsername("openrelayproject")
+            .setPassword("openrelayproject")
             .createIceServer(),
         PeerConnection.IceServer.builder("turn:openrelay.metered.ca:443")
-            .setUsername("openrelay")
-            .setPassword("openrelay")
+            .setUsername("openrelayproject")
+            .setPassword("openrelayproject")
             .createIceServer(),
         PeerConnection.IceServer.builder("turn:openrelay.metered.ca:443?transport=tcp")
-            .setUsername("openrelay")
-            .setPassword("openrelay")
+            .setUsername("openrelayproject")
+            .setPassword("openrelayproject")
             .createIceServer(),
         PeerConnection.IceServer.builder("turns:openrelay.metered.ca:443?transport=tcp")
-            .setUsername("openrelay")
-            .setPassword("openrelay")
+            .setUsername("openrelayproject")
+            .setPassword("openrelayproject")
             .createIceServer(),
         PeerConnection.IceServer.builder("turn:relay.metered.ca:80")
-            .setUsername("openrelay")
-            .setPassword("openrelay")
+            .setUsername("openrelayproject")
+            .setPassword("openrelayproject")
             .createIceServer(),
         PeerConnection.IceServer.builder("turn:relay.metered.ca:443")
-            .setUsername("openrelay")
-            .setPassword("openrelay")
+            .setUsername("openrelayproject")
+            .setPassword("openrelayproject")
             .createIceServer(),
         PeerConnection.IceServer.builder("turn:relay.metered.ca:443?transport=tcp")
-            .setUsername("openrelay")
-            .setPassword("openrelay")
+            .setUsername("openrelayproject")
+            .setPassword("openrelayproject")
+            .createIceServer(),
+        // Static Auth endpoints for extra redundancy
+        PeerConnection.IceServer.builder("turn:staticauth.openrelay.metered.ca:80")
+            .setUsername("openrelayproject")
+            .setPassword("openrelayprojectsecret")
+            .createIceServer(),
+        PeerConnection.IceServer.builder("turn:staticauth.openrelay.metered.ca:443")
+            .setUsername("openrelayproject")
+            .setPassword("openrelayprojectsecret")
             .createIceServer()
     )
 

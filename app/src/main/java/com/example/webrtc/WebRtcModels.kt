@@ -31,5 +31,6 @@ data class SignalingMessage(
     val sdpMLineIndex: Int? = null,
     val candidate: String? = null,
     val command: String? = null,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val id: String = java.util.UUID.randomUUID().toString()
 )

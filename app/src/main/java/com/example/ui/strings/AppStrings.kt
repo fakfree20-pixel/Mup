@@ -27,8 +27,8 @@ object AppStrings {
     fun testSiren(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "🚨 सायरन टेस्ट" else "🚨 Test Siren"
     fun stopCamera(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "कैमरा बंद करें" else "Stop Camera"
     fun runInBackgroundBtn(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "📲 बैकग्राउंड में चलाएं (होम पर जाएं)" else "📲 Run in Background (Minimize)"
-    fun runInBackgroundDesc(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "ऐप बैकग्राउंड में चलती रहेगी और आप फोन पर दूसरा कोई भी काम कर सकते हैं" else "CCTV stream runs in background while you use other apps freely"
-    fun backgroundActiveToast(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "✅ CCTV कैमरा बैकग्राउंड में लाइव चल रहा है। आप अन्य ऐप्स इस्तेमाल कर सकते हैं।" else "✅ CCTV stream is active in the background. You can use other apps freely."
+    fun runInBackgroundDesc(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "ऐप बैकग्राउंड में चलती रहेगी और आप फोन पर कोई भी दूसरा काम कर सकते हैं" else "CCTV stream runs in background while you use other apps freely"
+    fun backgroundActiveToast(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "✅ CCTV कैमरा बैकग्राउंड में लाइव चालू है। आप फोन पर कोई भी दूसरा काम कर सकते हैं!" else "✅ CCTV is streaming in background. You can use other apps freely!"
     fun pipModeBtn(lang: AppLanguage) = if (lang == AppLanguage.HINDI) "🪟 छोटी विंडो (Picture-in-Picture)" else "🪟 Floating Window (PiP)"
 
     // Viewer Mode Screen

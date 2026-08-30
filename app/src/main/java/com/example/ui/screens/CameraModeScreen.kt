@@ -566,21 +566,10 @@ fun CameraModeScreen(
                 Button(
                     onClick = {
                         viewModel.showToast(AppStrings.backgroundActiveToast(language))
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            try {
-                                val params = PictureInPictureParams.Builder()
-                                    .setAspectRatio(Rational(16, 9))
-                                    .build()
-                                val entered = activity?.enterPictureInPictureMode(params) ?: false
-                                if (!entered) {
-                                    activity?.moveTaskToBack(true)
-                                }
-                            } catch (_: Exception) {
-                                activity?.moveTaskToBack(true)
-                            }
-                        } else {
+                        viewModel.setPowerSaver(false)
+                        try {
                             activity?.moveTaskToBack(true)
-                        }
+                        } catch (_: Exception) {}
                     },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -669,7 +658,7 @@ fun CameraModeScreen(
             }
         }
 
-        // 3. Black Screen / Power Saver Stealth Overlay
+        // 3. Black Screen / Power Saver Stealth Overlay (100% Black with absolutely nothing on screen)
         if (isPowerSaverActive) {
             Box(
                 modifier = Modifier
@@ -681,36 +670,8 @@ fun CameraModeScreen(
                     ) {
                         viewModel.togglePowerSaver()
                     }
-                    .testTag("black_screen_power_saver_overlay"),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text(
-                        text = currentTime,
-                        color = Color(0x1FFFFFFF), // Ultra faint stealth clock
-                        fontSize = 44.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Text(
-                        text = if (language == AppLanguage.HINDI) "🔒 स्टेल्थ मोड चालू (स्क्रीन बंद दिखेगी)" else "🔒 Stealth Streaming Active",
-                        color = Color(0x1F10B981),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 1.sp
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = if (language == AppLanguage.HINDI) "स्क्रीन चालू करने के लिए कहीं भी टच करें" else "Tap anywhere to wake screen",
-                        color = Color(0x1AFFFFFF),
-                        fontSize = 11.sp
-                    )
-                }
-            }
+                    .testTag("black_screen_power_saver_overlay")
+            )
         }
     }
 }

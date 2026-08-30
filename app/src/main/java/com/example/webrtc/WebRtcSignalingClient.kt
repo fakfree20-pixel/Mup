@@ -50,6 +50,23 @@ class WebRtcSignalingClient(
     private var pollingJob: Job? = null
     private var backupPollingJob: Job? = null
     private val processedMessageHashes = Collections.synchronizedSet(mutableSetOf<String>())
+    private val processedIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val processedIdsList = java.util.Collections.synchronizedList(mutableListOf<String>())
+
+    private fun isDuplicate(id: String): Boolean {
+        synchronized(processedIds) {
+            if (processedIds.contains(id)) {
+                return true
+            }
+            processedIds.add(id)
+            processedIdsList.add(id)
+            if (processedIdsList.size > 200) {
+                val eldest = processedIdsList.removeAt(0)
+                processedIds.remove(eldest)
+            }
+            return false
+        }
+    }
 
     // Room topics:
     // Camera listens on: cctv_sig_${cleanRoom}_viewer (messages sent by viewer)
@@ -205,18 +222,30 @@ class WebRtcSignalingClient(
     private fun parseAndDispatch(jsonStr: String) {
         try {
             val json = JSONObject(jsonStr)
+            val id = json.optString("id")
             val type = json.optString("type")
             val sender = json.optString("senderId")
 
             // Don't process self messages
             if (sender == clientRole) return
 
-            // Deduplication by signature
-            val candidateSnippet = json.optString("candidate").take(30)
-            val sdpSnippet = json.optString("sdp").take(30)
-            val sig = "$type:$sender:$candidateSnippet:$sdpSnippet"
-            if (!processedMessageHashes.add(sig)) {
-                return // Already processed
+            // 1. Deduplicate by unique message ID (highly recommended)
+            if (id.isNotBlank()) {
+                if (isDuplicate(id)) {
+                    return // Already processed this exact message instance
+                }
+            } else {
+                // 2. Fallback deduplication for legacy/older messages
+                // ONLY deduplicate critical setup messages (OFFER, ANSWER, ICE_CANDIDATE)
+                // NEVER deduplicate ROOM_JOINED, HEARTBEAT, or COMMAND messages by static signature
+                if (type == "OFFER" || type == "ANSWER" || type == "ICE_CANDIDATE") {
+                    val candidateSnippet = json.optString("candidate").take(30)
+                    val sdpSnippet = json.optString("sdp").take(30)
+                    val sig = "$type:$sender:$candidateSnippet:$sdpSnippet"
+                    if (!processedMessageHashes.add(sig)) {
+                        return // Already processed
+                    }
+                }
             }
 
             val msg = SignalingMessage(
@@ -229,7 +258,8 @@ class WebRtcSignalingClient(
                 sdpMLineIndex = if (json.has("sdpMLineIndex")) json.getInt("sdpMLineIndex") else null,
                 candidate = if (json.has("candidate")) json.getString("candidate") else null,
                 command = if (json.has("command")) json.getString("command") else null,
-                timestamp = json.optLong("timestamp", System.currentTimeMillis())
+                timestamp = json.optLong("timestamp", System.currentTimeMillis()),
+                id = if (id.isNotBlank()) id else java.util.UUID.randomUUID().toString()
             )
             onMessageReceived(msg)
         } catch (e: Exception) {
@@ -241,6 +271,7 @@ class WebRtcSignalingClient(
         if (!isRunning) return
         try {
             val json = JSONObject().apply {
+                put("id", msg.id)
                 put("type", msg.type)
                 put("senderId", msg.senderId)
                 put("targetRoom", msg.targetRoom)

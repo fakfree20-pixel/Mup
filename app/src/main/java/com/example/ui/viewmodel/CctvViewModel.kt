@@ -46,6 +46,21 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     private val db = AppDatabase.getDatabase(application)
     private val dao = db.cctvDao()
 
+    private var backgroundLifecycleOwner: AlwaysActiveLifecycleOwner? = null
+
+    class AlwaysActiveLifecycleOwner : LifecycleOwner {
+        private val registry = androidx.lifecycle.LifecycleRegistry(this)
+        override val lifecycle: androidx.lifecycle.Lifecycle get() = registry
+
+        init {
+            registry.currentState = androidx.lifecycle.Lifecycle.State.RESUMED
+        }
+
+        fun destroy() {
+            registry.currentState = androidx.lifecycle.Lifecycle.State.DESTROYED
+        }
+    }
+
     val savedCameras = dao.getAllSavedCameras()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
@@ -203,8 +218,12 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             Log.w(TAG, "Could not start CctvForegroundService: ${e.message}")
         }
 
+        val activeOwner = backgroundLifecycleOwner ?: AlwaysActiveLifecycleOwner().also {
+            backgroundLifecycleOwner = it
+        }
+
         // 1. Setup CameraX for local display & motion analysis
-        cameraManager.startCamera(lifecycleOwner, previewView) {
+        cameraManager.startCamera(activeOwner, previewView) {
             _isCameraStreaming.value = true
         }
 
@@ -420,6 +439,8 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         try {
             CctvForegroundService.stopService(getApplication())
         } catch (_: Exception) {}
+        backgroundLifecycleOwner?.destroy()
+        backgroundLifecycleOwner = null
         discovery.stopBroadcasting()
         httpServer?.stop()
         httpServer = null
