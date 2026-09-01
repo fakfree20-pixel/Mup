@@ -31,6 +31,15 @@ class WebRtcSignalingClient(
     
     private val processedIds = Collections.synchronizedSet(mutableSetOf<String>())
     private val processedIdsList = Collections.synchronizedList(mutableListOf<String>())
+    private val outgoingQueue = Collections.synchronizedList(mutableListOf<SignalingMessage>())
+
+    // List of public, ultra-reliable MQTT signaling brokers for global low latency
+    private val brokers = listOf(
+        "tcp://broker.hivemq.com:1883",
+        "tcp://broker.emqx.io:1883",
+        "ssl://broker.emqx.io:8883"
+    )
+    private var currentBrokerIndex = 0
 
     private fun isDuplicate(id: String): Boolean {
         synchronized(processedIds) {
@@ -52,7 +61,7 @@ class WebRtcSignalingClient(
     fun start(scope: CoroutineScope) {
         if (isRunning) return
         isRunning = true
-        onStateChanged?.invoke("Connecting to Secure Relay...")
+        onStateChanged?.invoke("Connecting to Relay Server...")
         
         connectionJob = scope.launch(Dispatchers.IO) {
             while (isRunning && isActive) {
@@ -61,7 +70,8 @@ class WebRtcSignalingClient(
                         connectMqtt()
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "MQTT connection error", e)
+                    Log.w(TAG, "MQTT connection error: ${e.message}")
+                    currentBrokerIndex = (currentBrokerIndex + 1) % brokers.size
                 }
                 delay(3000)
             }
@@ -70,22 +80,23 @@ class WebRtcSignalingClient(
     
     private fun connectMqtt() {
         try {
-            val broker = "ssl://broker.emqx.io:8883"
-            val clientId = "cctv_${clientRole}_${UUID.randomUUID().toString().take(8)}"
+            val broker = brokers[currentBrokerIndex]
+            val clientId = "cctv_${clientRole.lowercase()}_${UUID.randomUUID().toString().take(8)}"
             
+            Log.d(TAG, "Connecting to MQTT broker: $broker ($clientId)")
             mqttClient = MqttClient(broker, clientId, MemoryPersistence())
             
             val options = MqttConnectOptions().apply {
                 isCleanSession = true
-                connectionTimeout = 10
-                keepAliveInterval = 20
+                connectionTimeout = 8
+                keepAliveInterval = 15
                 isAutomaticReconnect = true
             }
             
             mqttClient?.setCallback(object : MqttCallback {
                 override fun connectionLost(cause: Throwable?) {
-                    Log.w(TAG, "MQTT Connection lost")
-                    if (isRunning) onStateChanged?.invoke("Relay disconnected, reconnecting...")
+                    Log.w(TAG, "MQTT Connection lost: ${cause?.message}")
+                    if (isRunning) onStateChanged?.invoke("Relay reconnecting...")
                 }
 
                 override fun messageArrived(topic: String?, message: MqttMessage?) {
@@ -101,14 +112,17 @@ class WebRtcSignalingClient(
             mqttClient?.connect(options)
             mqttClient?.subscribe(listenTopic, 1)
             
-            Log.d(TAG, "MQTT Connected and subscribed to $listenTopic")
-            onStateChanged?.invoke("Connected to Secure Relay")
+            Log.d(TAG, "MQTT Connected and subscribed to $listenTopic on $broker")
+            onStateChanged?.invoke("Connected to Relay")
             
-            // Send ROOM_JOINED automatically upon connect
+            // Flush any pending outgoing messages
+            flushOutgoingQueue()
+
+            // Send initial ping
             sendMessage(SignalingMessage(type = "ROOM_JOINED", senderId = clientRole, targetRoom = cleanRoom))
             
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to connect MQTT", e)
+            Log.e(TAG, "Failed to connect MQTT: ${e.message}")
             throw e
         }
     }
@@ -120,7 +134,7 @@ class WebRtcSignalingClient(
             val type = json.optString("type")
             val sender = json.optString("senderId")
             
-            if (sender == clientRole) return
+            if (sender.equals(clientRole, ignoreCase = true)) return
             
             if (id.isNotBlank() && isDuplicate(id)) return
             
@@ -143,9 +157,22 @@ class WebRtcSignalingClient(
         }
     }
 
-    fun sendMessage(msg: SignalingMessage) {
-        if (!isRunning) return
-        try {
+    private fun flushOutgoingQueue() {
+        synchronized(outgoingQueue) {
+            val iterator = outgoingQueue.iterator()
+            while (iterator.hasNext()) {
+                val msg = iterator.next()
+                if (doPublish(msg)) {
+                    iterator.remove()
+                } else {
+                    break
+                }
+            }
+        }
+    }
+
+    private fun doPublish(msg: SignalingMessage): Boolean {
+        return try {
             val json = JSONObject().apply {
                 put("id", msg.id)
                 put("type", msg.type)
@@ -164,12 +191,25 @@ class WebRtcSignalingClient(
             if (mqttClient?.isConnected == true) {
                 val mqttMsg = MqttMessage(payload).apply { qos = 1 }
                 mqttClient?.publish(sendTopic, mqttMsg)
-                Log.d(TAG, "Published ${msg.type} to $sendTopic (Size: ${payload.size} bytes)")
+                Log.d(TAG, "Published ${msg.type} to $sendTopic (bytes: ${payload.size})")
+                true
             } else {
-                Log.w(TAG, "MQTT not connected, cannot send ${msg.type}")
+                false
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending MQTT message", e)
+            Log.e(TAG, "Error publishing MQTT message", e)
+            false
+        }
+    }
+
+    fun sendMessage(msg: SignalingMessage) {
+        if (!isRunning) return
+        if (!doPublish(msg)) {
+            synchronized(outgoingQueue) {
+                if (outgoingQueue.size < 50) {
+                    outgoingQueue.add(msg)
+                }
+            }
         }
     }
 
@@ -184,5 +224,6 @@ class WebRtcSignalingClient(
         mqttClient = null
         processedIds.clear()
         processedIdsList.clear()
+        outgoingQueue.clear()
     }
 }

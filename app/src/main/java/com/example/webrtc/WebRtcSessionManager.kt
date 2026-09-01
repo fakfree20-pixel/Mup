@@ -53,17 +53,20 @@ class WebRtcSessionManager(
     var onCommandReceived: ((String) -> Unit)? = null
     var onRemoteSnapshotRequested: (() -> Unit)? = null
 
-    // STUN and TURN Relay Servers for inter-city, cellular 4G/5G and cross-NAT streaming
+    // Global High-Speed STUN and TURN Relay Servers for Mobile Data 4G/5G, Hotspot & VPN traversal
     private val iceServers = listOf(
-        // Google Global STUN
+        // Google Global STUN Servers
         PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
         PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer(),
         PeerConnection.IceServer.builder("stun:stun2.l.google.com:19302").createIceServer(),
         PeerConnection.IceServer.builder("stun:stun3.l.google.com:19302").createIceServer(),
         PeerConnection.IceServer.builder("stun:stun4.l.google.com:19302").createIceServer(),
+        // Cloudflare STUN
         PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer(),
+        // Twilio STUN
         PeerConnection.IceServer.builder("stun:global.stun.twilio.com:3478?transport=udp").createIceServer(),
-        // Free Global TURN Servers (for inter-city CGNAT & Wi-Fi router relay)
+        PeerConnection.IceServer.builder("stun:global.stun.twilio.com:3478?transport=tcp").createIceServer(),
+        // OpenRelay Global TURN (UDP and TCP on ports 80 and 443 to bypass firewall/cellular blocks)
         PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80")
             .setUsername("openrelayproject")
             .setPassword("openrelayproject")
@@ -79,15 +82,16 @@ class WebRtcSessionManager(
         PeerConnection.IceServer.builder("turns:openrelay.metered.ca:443?transport=tcp")
             .setUsername("openrelayproject")
             .setPassword("openrelayproject")
-            .createIceServer(),
-        // Twilio network traversal STUN over TCP (fallback for strict firewalls)
-        PeerConnection.IceServer.builder("stun:global.stun.twilio.com:3478?transport=tcp").createIceServer()
+            .createIceServer()
     )
 
     private val pendingIceCandidates = java.util.Collections.synchronizedList(mutableListOf<IceCandidate>())
     private val localIceCandidates = java.util.Collections.synchronizedList(mutableListOf<IceCandidate>())
+    
     @Volatile
     private var isRemoteDescriptionSet = false
+    @Volatile
+    private var isCreatingOffer = false
 
     init {
         initializePeerConnectionFactory()
@@ -121,7 +125,18 @@ class WebRtcSessionManager(
         currentRoomId = roomId
         currentIsFrontCamera = isFrontCamera
         _connectionState.value = WebRtcConnectionState.CONNECTING_SIGNALING
-        _statusText.value = "Connecting to Mobile Data Room $roomId..."
+        _statusText.value = "Connecting to Relay Room $roomId..."
+
+        setupPeerConnection(scope)
+
+        if (isCameraMode) {
+            setupCameraMediaTracks(currentIsFrontCamera)
+            _statusText.value = "Camera is online & waiting for Viewer..."
+        } else {
+            setupViewerMediaTracks()
+            _connectionState.value = WebRtcConnectionState.WAITING_PEER
+            _statusText.value = "Waiting for Camera to connect..."
+        }
 
         signalingClient = WebRtcSignalingClient(
             clientRole = if (isCameraMode) "CAMERA" else "VIEWER",
@@ -136,18 +151,8 @@ class WebRtcSessionManager(
             start(scope)
         }
 
-        setupPeerConnection(scope)
         if (!isCameraMode) {
-            setupViewerMediaTracks()
-        }
-
-        if (isCameraMode) {
-            _statusText.value = "Camera is online & waiting for Viewer..."
-        } else {
-            _connectionState.value = WebRtcConnectionState.WAITING_PEER
-            _statusText.value = "Waiting for Camera video stream on 4G/5G..."
-
-            // Send periodic ROOM_JOINED pings to camera across cities until connected
+            // Viewer periodically sends ROOM_JOINED until connected
             scope.launch(Dispatchers.IO) {
                 while (scope.isActive) {
                     if (_connectionState.value != WebRtcConnectionState.CONNECTED) {
@@ -183,21 +188,19 @@ class WebRtcSessionManager(
                         PeerConnection.IceConnectionState.CONNECTED,
                         PeerConnection.IceConnectionState.COMPLETED -> {
                             _connectionState.value = WebRtcConnectionState.CONNECTED
-                            _statusText.value = "● WebRTC P2P Live (Mobile Data)"
+                            _statusText.value = "● Live Stream Connected"
                         }
                         PeerConnection.IceConnectionState.DISCONNECTED -> {
                             _connectionState.value = WebRtcConnectionState.DISCONNECTED
-                            _statusText.value = "Connection lost. Reconnecting..."
-                            if (isCameraMode) stopCameraMediaTracks()
+                            _statusText.value = "Connection interrupted. Reconnecting..."
                         }
                         PeerConnection.IceConnectionState.FAILED -> {
                             _connectionState.value = WebRtcConnectionState.FAILED
-                            _statusText.value = "P2P connection failed. Retrying..."
-                            if (isCameraMode) stopCameraMediaTracks()
+                            _statusText.value = "Connection failed. Retrying..."
                         }
                         PeerConnection.IceConnectionState.CHECKING -> {
                             _connectionState.value = WebRtcConnectionState.CONNECTING_P2P
-                            _statusText.value = "Connecting via STUN (P2P NAT Traversal)..."
+                            _statusText.value = "Connecting P2P / Relay..."
                         }
                         else -> {}
                     }
@@ -216,7 +219,7 @@ class WebRtcSessionManager(
                     val msg = SignalingMessage(
                         type = "ICE_CANDIDATE",
                         senderId = if (isCameraMode) "CAMERA" else "VIEWER",
-                        targetRoom = "",
+                        targetRoom = currentRoomId,
                         sdpMid = candidate.sdpMid,
                         sdpMLineIndex = candidate.sdpMLineIndex,
                         candidate = candidate.sdp
@@ -260,9 +263,7 @@ class WebRtcSessionManager(
         peerConnection = peerConnectionFactory?.createPeerConnection(rtcConfig, observer)
 
         if (isCameraMode) {
-            val dcInit = DataChannel.Init().apply {
-                ordered = true
-            }
+            val dcInit = DataChannel.Init().apply { ordered = true }
             dataChannel = peerConnection?.createDataChannel("cctv_commands", dcInit)
             dataChannel?.let { setupDataChannelListeners(it) }
         }
@@ -285,7 +286,6 @@ class WebRtcSessionManager(
         })
     }
 
-
     private fun setupViewerMediaTracks() {
         val factory = peerConnectionFactory ?: return
         val audioConstraints = MediaConstraints().apply {
@@ -294,72 +294,43 @@ class WebRtcSessionManager(
         }
         localAudioSource = factory.createAudioSource(audioConstraints)
         localAudioTrack = factory.createAudioTrack("VIEWER_TALK_TRACK", localAudioSource)
-        // Disabled initially until user holds mic button
         localAudioTrack?.setEnabled(false)
         peerConnection?.addTrack(localAudioTrack, listOf("viewer_audio"))
-    }
-
-    private fun stopCameraMediaTracks() {
-        try {
-            peerConnection?.senders?.forEach { sender ->
-                peerConnection?.removeTrack(sender)
-            }
-            videoCapturer?.stopCapture()
-            videoCapturer?.dispose()
-            videoCapturer = null
-            
-            localVideoTrack?.dispose()
-            localVideoTrack = null
-            
-            localAudioTrack?.dispose()
-            localAudioTrack = null
-            
-            surfaceTextureHelper?.dispose()
-            surfaceTextureHelper = null
-            
-            localVideoSource?.dispose()
-            localVideoSource = null
-            
-            localAudioSource?.dispose()
-            localAudioSource = null
-            
-            Log.d(TAG, "Camera media tracks released to save battery")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping media tracks", e)
-        }
     }
 
     private fun setupCameraMediaTracks(isFrontCamera: Boolean) {
         val factory = peerConnectionFactory ?: return
 
-        // 1. Create Video Source and Capturer
-        surfaceTextureHelper = SurfaceTextureHelper.create("WebRtcCaptureThread", rootEglBase.eglBaseContext)
-        localVideoSource = factory.createVideoSource(false)
+        try {
+            if (localVideoTrack == null) {
+                surfaceTextureHelper = SurfaceTextureHelper.create("WebRtcCaptureThread", rootEglBase.eglBaseContext)
+                localVideoSource = factory.createVideoSource(false)
 
-        videoCapturer = createCameraCapturer(isFrontCamera)
-        videoCapturer?.let { capturer ->
-            capturer.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
-            // 720p 30fps for ultra-low latency & crystal clear video over mobile data
-            capturer.startCapture(1280, 720, 30)
+                videoCapturer = createCameraCapturer(isFrontCamera)
+                videoCapturer?.let { capturer ->
+                    capturer.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
+                    capturer.startCapture(1280, 720, 30)
+                }
+
+                localVideoTrack = factory.createVideoTrack("CCTV_VIDEO_TRACK", localVideoSource)
+                localVideoTrack?.setEnabled(true)
+                peerConnection?.addTrack(localVideoTrack, listOf("cctv_stream"))
+            }
+
+            if (localAudioTrack == null) {
+                val audioConstraints = MediaConstraints().apply {
+                    mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "false"))
+                }
+                localAudioSource = factory.createAudioSource(audioConstraints)
+                localAudioTrack = factory.createAudioTrack("CCTV_AUDIO_TRACK", localAudioSource)
+                localAudioTrack?.setEnabled(true)
+                peerConnection?.addTrack(localAudioTrack, listOf("cctv_stream"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting up camera media tracks", e)
         }
-
-        localVideoTrack = factory.createVideoTrack("CCTV_VIDEO_TRACK", localVideoSource)
-        localVideoTrack?.setEnabled(true)
-
-        // 2. Create Audio Source & Track
-        val audioConstraints = MediaConstraints().apply {
-            mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "false"))
-            mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", "false"))
-        }
-        localAudioSource = factory.createAudioSource(audioConstraints)
-        localAudioTrack = factory.createAudioTrack("CCTV_AUDIO_TRACK", localAudioSource)
-        localAudioTrack?.setEnabled(true)
-
-        // Add tracks to PeerConnection
-        peerConnection?.addTrack(localVideoTrack, listOf("cctv_stream"))
-        peerConnection?.addTrack(localAudioTrack, listOf("cctv_stream"))
     }
 
     fun enableViewerTwoWayAudio(enable: Boolean) {
@@ -371,7 +342,6 @@ class WebRtcSessionManager(
         val enumerator = Camera2Enumerator(context)
         val deviceNames = enumerator.deviceNames
 
-        // Try front or back as requested
         for (name in deviceNames) {
             if (isFront && enumerator.isFrontFacing(name)) {
                 return enumerator.createCapturer(name, null)
@@ -381,7 +351,6 @@ class WebRtcSessionManager(
             }
         }
 
-        // Fallback to any available camera
         for (name in deviceNames) {
             val capturer = enumerator.createCapturer(name, null)
             if (capturer != null) return capturer
@@ -403,9 +372,12 @@ class WebRtcSessionManager(
     }
 
     private fun createAndSendOffer(roomId: String) {
+        if (isCreatingOffer) return
+        isCreatingOffer = true
+
         val sdpConstraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true")) // To hear viewer push-to-talk
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
         }
 
         peerConnection?.createOffer(object : SdpObserver {
@@ -413,22 +385,40 @@ class WebRtcSessionManager(
                 peerConnection?.setLocalDescription(object : SdpObserver {
                     override fun onCreateSuccess(p0: SessionDescription?) {}
                     override fun onSetSuccess() {
+                        isCreatingOffer = false
                         Log.d(TAG, "SetLocalDescription success (Offer)")
                         _connectionState.value = WebRtcConnectionState.WAITING_PEER
-                        _statusText.value = "Broadcasting offer. Ready for Viewer phone!"
+                        _statusText.value = "Offer ready. Waiting for Viewer..."
 
                         val msg = SignalingMessage(
                             type = "OFFER",
                             senderId = "CAMERA",
-                            targetRoom = roomId,
-                            sdp = minifySdp(sessionDescription.description),
+                            targetRoom = roomId.ifBlank { currentRoomId },
+                            sdp = sessionDescription.description,
                             sdpType = sessionDescription.type.canonicalForm()
                         )
                         signalingClient?.sendMessage(msg)
+
+                        // Send local ICE candidates
+                        synchronized(localIceCandidates) {
+                            for (cand in localIceCandidates) {
+                                signalingClient?.sendMessage(
+                                    SignalingMessage(
+                                        type = "ICE_CANDIDATE",
+                                        senderId = "CAMERA",
+                                        targetRoom = roomId.ifBlank { currentRoomId },
+                                        sdpMid = cand.sdpMid,
+                                        sdpMLineIndex = cand.sdpMLineIndex,
+                                        candidate = cand.sdp
+                                    )
+                                )
+                            }
+                        }
                     }
 
-                    override fun onCreateFailure(p0: String?) {}
+                    override fun onCreateFailure(p0: String?) { isCreatingOffer = false }
                     override fun onSetFailure(p0: String?) {
+                        isCreatingOffer = false
                         Log.e(TAG, "SetLocalDescription failed: $p0")
                     }
                 }, sessionDescription)
@@ -436,9 +426,10 @@ class WebRtcSessionManager(
 
             override fun onSetSuccess() {}
             override fun onCreateFailure(error: String?) {
+                isCreatingOffer = false
                 Log.e(TAG, "CreateOffer failed: $error")
             }
-            override fun onSetFailure(p0: String?) {}
+            override fun onSetFailure(p0: String?) { isCreatingOffer = false }
         }, sdpConstraints)
     }
 
@@ -447,31 +438,25 @@ class WebRtcSessionManager(
         when (msg.type) {
             "ROOM_JOINED" -> {
                 if (isCameraMode) {
-                    if (localVideoTrack == null) {
-                        // Start camera now that viewer is connected
-                        setupCameraMediaTracks(currentIsFrontCamera)
-                        createAndSendOffer(msg.targetRoom.ifBlank { currentRoomId })
-                    }
                     val localDesc = peerConnection?.localDescription
                     if (localDesc != null && localDesc.type == SessionDescription.Type.OFFER) {
-                        Log.d(TAG, "Re-broadcasting existing OFFER to joined Viewer")
+                        Log.d(TAG, "Re-sending existing OFFER to Viewer")
                         val offerMsg = SignalingMessage(
                             type = "OFFER",
                             senderId = "CAMERA",
-                            targetRoom = msg.targetRoom.ifBlank { "" },
-                            sdp = minifySdp(localDesc.description),
+                            targetRoom = msg.targetRoom.ifBlank { currentRoomId },
+                            sdp = localDesc.description,
                             sdpType = localDesc.type.canonicalForm()
                         )
                         signalingClient?.sendMessage(offerMsg)
 
-                        // Re-send all generated ICE candidates
                         synchronized(localIceCandidates) {
                             for (cand in localIceCandidates) {
                                 signalingClient?.sendMessage(
                                     SignalingMessage(
                                         type = "ICE_CANDIDATE",
                                         senderId = "CAMERA",
-                                        targetRoom = "",
+                                        targetRoom = msg.targetRoom.ifBlank { currentRoomId },
                                         sdpMid = cand.sdpMid,
                                         sdpMLineIndex = cand.sdpMLineIndex,
                                         candidate = cand.sdp
@@ -487,7 +472,7 @@ class WebRtcSessionManager(
             "OFFER" -> {
                 if (!isCameraMode && msg.sdp != null) {
                     _connectionState.value = WebRtcConnectionState.EXCHANGING_SDP
-                    _statusText.value = "Received Camera Offer. Creating Answer..."
+                    _statusText.value = "Received Camera stream. Connecting..."
 
                     val remoteSdp = SessionDescription(SessionDescription.Type.OFFER, msg.sdp)
                     peerConnection?.setRemoteDescription(object : SdpObserver {
@@ -507,7 +492,7 @@ class WebRtcSessionManager(
             "ANSWER" -> {
                 if (isCameraMode && msg.sdp != null) {
                     _connectionState.value = WebRtcConnectionState.CONNECTING_P2P
-                    _statusText.value = "Connecting to Viewer over 4G/5G..."
+                    _statusText.value = "Connecting to Viewer phone..."
 
                     val remoteSdp = SessionDescription(SessionDescription.Type.ANSWER, msg.sdp)
                     peerConnection?.setRemoteDescription(object : SdpObserver {
@@ -574,20 +559,19 @@ class WebRtcSessionManager(
                         val msg = SignalingMessage(
                             type = "ANSWER",
                             senderId = "VIEWER",
-                            targetRoom = "",
-                            sdp = minifySdp(sessionDescription.description),
+                            targetRoom = currentRoomId,
+                            sdp = sessionDescription.description,
                             sdpType = sessionDescription.type.canonicalForm()
                         )
                         signalingClient?.sendMessage(msg)
 
-                        // Also send all local ICE candidates gathered so far
                         synchronized(localIceCandidates) {
                             for (cand in localIceCandidates) {
                                 signalingClient?.sendMessage(
                                     SignalingMessage(
                                         type = "ICE_CANDIDATE",
                                         senderId = "VIEWER",
-                                        targetRoom = "",
+                                        targetRoom = currentRoomId,
                                         sdpMid = cand.sdpMid,
                                         sdpMLineIndex = cand.sdpMLineIndex,
                                         candidate = cand.sdp
@@ -613,7 +597,6 @@ class WebRtcSessionManager(
     }
 
     fun sendCommand(cmd: String): Boolean {
-        // Try fast DataChannel first
         dataChannel?.let { dc ->
             if (dc.state() == DataChannel.State.OPEN) {
                 val buffer = DataChannel.Buffer(java.nio.ByteBuffer.wrap(cmd.toByteArray(Charsets.UTF_8)), false)
@@ -621,12 +604,11 @@ class WebRtcSessionManager(
                 return true
             }
         }
-        // Fallback: send via signaling channel
         signalingClient?.sendMessage(
             SignalingMessage(
                 type = "COMMAND",
                 senderId = if (isCameraMode) "CAMERA" else "VIEWER",
-                targetRoom = "",
+                targetRoom = currentRoomId,
                 command = cmd
             )
         )
@@ -672,8 +654,5 @@ class WebRtcSessionManager(
         } catch (e: Exception) {
             Log.w(TAG, "Error releasing WebRTC resources", e)
         }
-    }
-    private fun minifySdp(sdp: String): String {
-        return sdp.lines().filter { !it.trim().startsWith("a=extmap:") }.joinToString("\r\n") + "\r\n"
     }
 }
