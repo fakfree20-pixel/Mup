@@ -14,16 +14,22 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
-import com.example.R
+import com.example.receiver.BootReceiver
+import com.example.ui.viewmodel.CctvViewModel
+import com.example.webrtc.WebRtcSessionManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 /**
  * Foreground Service that keeps CCTV video streaming, WebRTC, audio recording,
- * and motion detection running 24/7 in the background even when the user switches apps
- * or turns off the screen.
+ * and background connection alive 24/7 even when the user switches apps
+ * or turns off the screen or restarts the device.
  */
 class CctvForegroundService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     companion object {
         private const val TAG = "CctvForegroundService"
@@ -71,14 +77,49 @@ class CctvForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val prefs = getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+
         if (intent?.action == ACTION_STOP) {
+            prefs.edit().putBoolean(BootReceiver.KEY_CAMERA_MODE_ACTIVE, false).apply()
+            CctvViewModel.cameraWebRtcSessionInstance?.release()
+            CctvViewModel.cameraWebRtcSessionInstance = null
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
 
-        val roomPin = intent?.getStringExtra(EXTRA_ROOM_PIN) ?: "ACTIVE"
-        val camId = intent?.getStringExtra(EXTRA_CAM_ID) ?: "CAM"
+        val roomPin = intent?.getStringExtra(EXTRA_ROOM_PIN) 
+            ?: prefs.getString(BootReceiver.KEY_ROOM_PIN, null) 
+            ?: "ACTIVE"
+        val camId = intent?.getStringExtra(EXTRA_CAM_ID) 
+            ?: prefs.getString(BootReceiver.KEY_CAM_ID, null) 
+            ?: "CAM"
+
+        // Persist camera mode as active
+        prefs.edit()
+            .putBoolean(BootReceiver.KEY_CAMERA_MODE_ACTIVE, true)
+            .putString(BootReceiver.KEY_ROOM_PIN, roomPin)
+            .putString(BootReceiver.KEY_CAM_ID, camId)
+            .apply()
+
+        // Ensure WebRTC Session is active and listening
+        if (CctvViewModel.cameraWebRtcSessionInstance == null && roomPin.isNotBlank()) {
+            try {
+                val session = WebRtcSessionManager(
+                    context = applicationContext,
+                    isCameraMode = true
+                ).apply {
+                    startSession(
+                        scope = CctvViewModel.backgroundScope,
+                        roomId = roomPin,
+                        isFrontCamera = false
+                    )
+                }
+                CctvViewModel.cameraWebRtcSessionInstance = session
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to init background WebRtcSessionManager", e)
+            }
+        }
 
         val notification = buildNotification(roomPin, camId)
 
@@ -135,7 +176,7 @@ class CctvForegroundService : Service() {
                 "CCTV Background Stream",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Keeps CCTV Camera Streaming in Background while using other apps"
+                description = "Keeps CCTV Camera Streaming in Background 24/7"
                 setShowBadge(false)
             }
             val notificationManager = getSystemService(NotificationManager::class.java)
@@ -165,8 +206,8 @@ class CctvForegroundService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("🔴 CCTV Camera Active in Background")
-            .setContentText("Room PIN: $roomPin ($camId) • Streaming Live 24/7")
+            .setContentTitle("🔴 CCTV Camera Active 24/7")
+            .setContentText("Room PIN: $roomPin • Background Ready")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setOngoing(true)
             .setContentIntent(openAppPendingIntent)

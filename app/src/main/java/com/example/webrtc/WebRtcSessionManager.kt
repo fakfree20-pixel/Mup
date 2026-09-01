@@ -45,6 +45,8 @@ class WebRtcSessionManager(
     val statusText: StateFlow<String> = _statusText
 
     private var signalingClient: WebRtcSignalingClient? = null
+    private var currentRoomId: String = ""
+    private var currentIsFrontCamera: Boolean = false
     private val executor = Executors.newSingleThreadExecutor()
 
     // Callbacks
@@ -116,6 +118,8 @@ class WebRtcSessionManager(
         roomId: String,
         isFrontCamera: Boolean = false
     ) {
+        currentRoomId = roomId
+        currentIsFrontCamera = isFrontCamera
         _connectionState.value = WebRtcConnectionState.CONNECTING_SIGNALING
         _statusText.value = "Connecting to Mobile Data Room $roomId..."
 
@@ -133,31 +137,12 @@ class WebRtcSessionManager(
         }
 
         setupPeerConnection(scope)
+        if (!isCameraMode) {
+            setupViewerMediaTracks()
+        }
 
         if (isCameraMode) {
-            setupCameraMediaTracks(isFrontCamera)
-            createAndSendOffer(roomId)
-
-            // Periodically re-broadcast offer if viewer hasn't completed handshake yet
-            scope.launch(Dispatchers.IO) {
-                while (scope.isActive) {
-                    delay(4000)
-                    if (_connectionState.value != WebRtcConnectionState.CONNECTED) {
-                        val localDesc = peerConnection?.localDescription
-                        if (localDesc != null && localDesc.type == SessionDescription.Type.OFFER) {
-                            signalingClient?.sendMessage(
-                                SignalingMessage(
-                                    type = "OFFER",
-                                    senderId = "CAMERA",
-                                    targetRoom = roomId,
-                                    sdp = minifySdp(localDesc.description),
-                                    sdpType = localDesc.type.canonicalForm()
-                                )
-                            )
-                        }
-                    }
-                }
-            }
+            _statusText.value = "Camera is online & waiting for Viewer..."
         } else {
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
             _statusText.value = "Waiting for Camera video stream on 4G/5G..."
@@ -203,10 +188,12 @@ class WebRtcSessionManager(
                         PeerConnection.IceConnectionState.DISCONNECTED -> {
                             _connectionState.value = WebRtcConnectionState.DISCONNECTED
                             _statusText.value = "Connection lost. Reconnecting..."
+                            if (isCameraMode) stopCameraMediaTracks()
                         }
                         PeerConnection.IceConnectionState.FAILED -> {
                             _connectionState.value = WebRtcConnectionState.FAILED
                             _statusText.value = "P2P connection failed. Retrying..."
+                            if (isCameraMode) stopCameraMediaTracks()
                         }
                         PeerConnection.IceConnectionState.CHECKING -> {
                             _connectionState.value = WebRtcConnectionState.CONNECTING_P2P
@@ -298,6 +285,50 @@ class WebRtcSessionManager(
         })
     }
 
+
+    private fun setupViewerMediaTracks() {
+        val factory = peerConnectionFactory ?: return
+        val audioConstraints = MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+        }
+        localAudioSource = factory.createAudioSource(audioConstraints)
+        localAudioTrack = factory.createAudioTrack("VIEWER_TALK_TRACK", localAudioSource)
+        // Disabled initially until user holds mic button
+        localAudioTrack?.setEnabled(false)
+        peerConnection?.addTrack(localAudioTrack, listOf("viewer_audio"))
+    }
+
+    private fun stopCameraMediaTracks() {
+        try {
+            peerConnection?.senders?.forEach { sender ->
+                peerConnection?.removeTrack(sender)
+            }
+            videoCapturer?.stopCapture()
+            videoCapturer?.dispose()
+            videoCapturer = null
+            
+            localVideoTrack?.dispose()
+            localVideoTrack = null
+            
+            localAudioTrack?.dispose()
+            localAudioTrack = null
+            
+            surfaceTextureHelper?.dispose()
+            surfaceTextureHelper = null
+            
+            localVideoSource?.dispose()
+            localVideoSource = null
+            
+            localAudioSource?.dispose()
+            localAudioSource = null
+            
+            Log.d(TAG, "Camera media tracks released to save battery")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping media tracks", e)
+        }
+    }
+
     private fun setupCameraMediaTracks(isFrontCamera: Boolean) {
         val factory = peerConnectionFactory ?: return
 
@@ -319,8 +350,8 @@ class WebRtcSessionManager(
         val audioConstraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
             mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "false"))
+            mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", "false"))
         }
         localAudioSource = factory.createAudioSource(audioConstraints)
         localAudioTrack = factory.createAudioTrack("CCTV_AUDIO_TRACK", localAudioSource)
@@ -333,20 +364,7 @@ class WebRtcSessionManager(
 
     fun enableViewerTwoWayAudio(enable: Boolean) {
         if (isCameraMode) return
-        val factory = peerConnectionFactory ?: return
-
-        if (enable && localAudioTrack == null) {
-            val audioConstraints = MediaConstraints().apply {
-                mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
-                mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
-            }
-            localAudioSource = factory.createAudioSource(audioConstraints)
-            localAudioTrack = factory.createAudioTrack("VIEWER_TALK_TRACK", localAudioSource)
-            localAudioTrack?.setEnabled(true)
-            peerConnection?.addTrack(localAudioTrack, listOf("viewer_audio"))
-        } else {
-            localAudioTrack?.setEnabled(enable)
-        }
+        localAudioTrack?.setEnabled(enable)
     }
 
     private fun createCameraCapturer(isFront: Boolean): VideoCapturer? {
@@ -429,6 +447,11 @@ class WebRtcSessionManager(
         when (msg.type) {
             "ROOM_JOINED" -> {
                 if (isCameraMode) {
+                    if (localVideoTrack == null) {
+                        // Start camera now that viewer is connected
+                        setupCameraMediaTracks(currentIsFrontCamera)
+                        createAndSendOffer(msg.targetRoom.ifBlank { currentRoomId })
+                    }
                     val localDesc = peerConnection?.localDescription
                     if (localDesc != null && localDesc.type == SessionDescription.Type.OFFER) {
                         Log.d(TAG, "Re-broadcasting existing OFFER to joined Viewer")

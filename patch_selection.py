@@ -1,4 +1,10 @@
-package com.example.ui.screens
+import sys
+
+with open("app/src/main/java/com/example/ui/screens/ModeSelectionScreen.kt", "r") as f:
+    content = f.read()
+
+# Let's replace the whole ModeSelectionScreen to be super clean: just two buttons.
+new_content = """package com.example.ui.screens
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -21,13 +27,14 @@ import com.example.R
 import com.example.ui.strings.AppLanguage
 import com.example.ui.strings.AppStrings
 import com.example.ui.theme.*
-import com.example.data.model.AppRole
+import com.example.AppRole
 
 @Composable
 fun ModeSelectionScreen(
     language: AppLanguage,
     onSelectRole: (AppRole) -> Unit,
     onOpenGallery: () -> Unit,
+    onToggleLanguage: () -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -110,3 +117,7 @@ fun ModeSelectionScreen(
         }
     }
 }
+"""
+
+with open("app/src/main/java/com/example/ui/screens/ModeSelectionScreen.kt", "w") as f:
+    f.write(new_content)

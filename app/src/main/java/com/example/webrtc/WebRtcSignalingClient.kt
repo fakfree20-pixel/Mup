@@ -7,21 +7,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
+import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
+import org.eclipse.paho.client.mqttv3.MqttCallback
+import org.eclipse.paho.client.mqttv3.MqttClient
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions
+import org.eclipse.paho.client.mqttv3.MqttMessage
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.IOException
-import java.io.InputStreamReader
 import java.util.Collections
-import java.util.concurrent.TimeUnit
+import java.util.UUID
 
 class WebRtcSignalingClient(
     private val clientRole: String, // "CAMERA" or "VIEWER"
@@ -30,34 +24,17 @@ class WebRtcSignalingClient(
     private val onStateChanged: ((String) -> Unit)? = null
 ) {
     private val TAG = "WebRtcSignaling"
-
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(6, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS) // For WebSocket
-        .writeTimeout(6, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
-        .build()
-
-    private val pollingClient = OkHttpClient.Builder()
-        .connectTimeout(6, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .writeTimeout(6, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
-        .build()
-
-    private var webSocket: WebSocket? = null
+    
+    private var mqttClient: MqttClient? = null
     private var isRunning = false
-    private var pollingJob: Job? = null
-    private var backupPollingJob: Job? = null
-    private val processedMessageHashes = Collections.synchronizedSet(mutableSetOf<String>())
-    private val processedIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-    private val processedIdsList = java.util.Collections.synchronizedList(mutableListOf<String>())
+    private var connectionJob: Job? = null
+    
+    private val processedIds = Collections.synchronizedSet(mutableSetOf<String>())
+    private val processedIdsList = Collections.synchronizedList(mutableListOf<String>())
 
     private fun isDuplicate(id: String): Boolean {
         synchronized(processedIds) {
-            if (processedIds.contains(id)) {
-                return true
-            }
+            if (processedIds.contains(id)) return true
             processedIds.add(id)
             processedIdsList.add(id)
             if (processedIdsList.size > 200) {
@@ -68,154 +45,71 @@ class WebRtcSignalingClient(
         }
     }
 
-    // Room topics:
-    // Camera listens on: cctv_sig_${cleanRoom}_viewer (messages sent by viewer)
-    // Camera sends to:   cctv_sig_${cleanRoom}_camera
-    // Viewer listens on: cctv_sig_${cleanRoom}_camera (messages sent by camera)
-    // Viewer sends to:   cctv_sig_${cleanRoom}_viewer
     private val cleanRoom = roomId.filter { it.isLetterOrDigit() }.lowercase()
     private val listenTopic = if (clientRole == "CAMERA") "cctv_sig_${cleanRoom}_viewer" else "cctv_sig_${cleanRoom}_camera"
     private val sendTopic = if (clientRole == "CAMERA") "cctv_sig_${cleanRoom}_camera" else "cctv_sig_${cleanRoom}_viewer"
-
+    
     fun start(scope: CoroutineScope) {
         if (isRunning) return
         isRunning = true
-        onStateChanged?.invoke("Connecting to Cloud Relay Room $cleanRoom...")
-
-        connectWebSocket(scope)
-        startHttpPollingFallback(scope)
-        startBackupRelayPolling(scope)
-
-        // Heartbeat / ping job to keep signaling channel warm
-        scope.launch(Dispatchers.IO) {
+        onStateChanged?.invoke("Connecting to Secure Relay...")
+        
+        connectionJob = scope.launch(Dispatchers.IO) {
             while (isRunning && isActive) {
-                delay(6000)
-                if (isRunning) {
-                    sendMessage(
-                        SignalingMessage(
-                            type = "HEARTBEAT",
-                            senderId = clientRole,
-                            targetRoom = cleanRoom
-                        )
-                    )
-                }
-            }
-        }
-    }
-
-    private fun connectWebSocket(scope: CoroutineScope) {
-        val wsUrl = "wss://ntfy.sh/$listenTopic/ws?since=all"
-        val request = Request.Builder()
-            .url(wsUrl)
-            .build()
-
-        webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "Signaling WebSocket opened for topic: $listenTopic")
-                onStateChanged?.invoke("Connected to Cloud Relay")
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
-                    val root = JSONObject(text)
-                    val event = root.optString("event")
-                    if (event == "message" || event.isEmpty()) {
-                        val messageBody = root.optString("message")
-                        if (messageBody.isNotBlank()) {
-                            parseAndDispatch(messageBody)
-                        }
+                    if (mqttClient == null || !mqttClient!!.isConnected) {
+                        connectMqtt()
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error parsing WS message: $text", e)
+                    Log.w(TAG, "MQTT connection error", e)
                 }
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.w(TAG, "Signaling WS failed: ${t.message}. Retrying in 2s...")
-                if (isRunning) {
-                    scope.launch(Dispatchers.IO) {
-                        delay(2000)
-                        if (isRunning) {
-                            connectWebSocket(scope)
-                        }
-                    }
-                }
-            }
-
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d(TAG, "Signaling WS closed ($code): $reason")
-            }
-        })
-    }
-
-    private fun startHttpPollingFallback(scope: CoroutineScope) {
-        pollingJob = scope.launch(Dispatchers.IO) {
-            var since = "all"
-            while (isActive && isRunning) {
-                try {
-                    val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=$since"
-                    val request = Request.Builder().url(pollUrl).build()
-                    val response = pollingClient.newCall(request).execute()
-                    if (response.isSuccessful && response.body != null) {
-                        val reader = BufferedReader(InputStreamReader(response.body!!.byteStream()))
-                        var line: String?
-                        while (reader.readLine().also { line = it } != null) {
-                            val l = line?.trim() ?: continue
-                            if (l.isNotBlank()) {
-                                try {
-                                    val obj = JSONObject(l)
-                                    val event = obj.optString("event")
-                                    if (event == "message" || event.isEmpty()) {
-                                        val msgBody = obj.optString("message")
-                                        if (msgBody.isNotBlank()) {
-                                            parseAndDispatch(msgBody)
-                                        }
-                                    }
-                                } catch (_: Exception) {}
-                            }
-                        }
-                        since = "30s"
-                    }
-                    response.close()
-                } catch (_: Exception) {
-                    // Ignore network hiccups, wait before polling again
-                }
-                delay(1500)
+                delay(3000)
             }
         }
     }
-
-    // Secondary backup relay via Dweet for guaranteed inter-city SDP delivery
-    private fun startBackupRelayPolling(scope: CoroutineScope) {
-        backupPollingJob = scope.launch(Dispatchers.IO) {
-            while (isActive && isRunning) {
-                try {
-                    val dweetUrl = "https://dweet.cc/get/latest/dweet/for/$listenTopic"
-                    val request = Request.Builder().url(dweetUrl).build()
-                    val response = pollingClient.newCall(request).execute()
-                    if (response.isSuccessful && response.body != null) {
-                        val bodyString = response.body!!.string()
-                        val root = JSONObject(bodyString)
-                        if (root.optString("this") == "succeeded") {
-                            val withArray = root.optJSONArray("with")
-                            if (withArray != null && withArray.length() > 0) {
-                                val firstItem = withArray.getJSONObject(0)
-                                val content = firstItem.optJSONObject("content")
-                                if (content != null) {
-                                    val rawPayload = content.optString("payload")
-                                    if (rawPayload.isNotBlank()) {
-                                        parseAndDispatch(rawPayload)
-                                    } else {
-                                        parseAndDispatch(content.toString())
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    response.close()
-                } catch (_: Exception) {}
-                delay(2000)
+    
+    private fun connectMqtt() {
+        try {
+            val broker = "ssl://broker.emqx.io:8883"
+            val clientId = "cctv_${clientRole}_${UUID.randomUUID().toString().take(8)}"
+            
+            mqttClient = MqttClient(broker, clientId, MemoryPersistence())
+            
+            val options = MqttConnectOptions().apply {
+                isCleanSession = true
+                connectionTimeout = 10
+                keepAliveInterval = 20
+                isAutomaticReconnect = true
             }
+            
+            mqttClient?.setCallback(object : MqttCallback {
+                override fun connectionLost(cause: Throwable?) {
+                    Log.w(TAG, "MQTT Connection lost")
+                    if (isRunning) onStateChanged?.invoke("Relay disconnected, reconnecting...")
+                }
+
+                override fun messageArrived(topic: String?, message: MqttMessage?) {
+                    message?.let {
+                        val payload = String(it.payload)
+                        parseAndDispatch(payload)
+                    }
+                }
+
+                override fun deliveryComplete(token: IMqttDeliveryToken?) {}
+            })
+            
+            mqttClient?.connect(options)
+            mqttClient?.subscribe(listenTopic, 1)
+            
+            Log.d(TAG, "MQTT Connected and subscribed to $listenTopic")
+            onStateChanged?.invoke("Connected to Secure Relay")
+            
+            // Send ROOM_JOINED automatically upon connect
+            sendMessage(SignalingMessage(type = "ROOM_JOINED", senderId = clientRole, targetRoom = cleanRoom))
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to connect MQTT", e)
+            throw e
         }
     }
 
@@ -225,29 +119,11 @@ class WebRtcSignalingClient(
             val id = json.optString("id")
             val type = json.optString("type")
             val sender = json.optString("senderId")
-
-            // Don't process self messages
+            
             if (sender == clientRole) return
-
-            // 1. Deduplicate by unique message ID (highly recommended)
-            if (id.isNotBlank()) {
-                if (isDuplicate(id)) {
-                    return // Already processed this exact message instance
-                }
-            } else {
-                // 2. Fallback deduplication for legacy/older messages
-                // ONLY deduplicate critical setup messages (OFFER, ANSWER, ICE_CANDIDATE)
-                // NEVER deduplicate ROOM_JOINED, HEARTBEAT, or COMMAND messages by static signature
-                if (type == "OFFER" || type == "ANSWER" || type == "ICE_CANDIDATE") {
-                    val candidateSnippet = json.optString("candidate").take(30)
-                    val sdpSnippet = json.optString("sdp").take(30)
-                    val sig = "$type:$sender:$candidateSnippet:$sdpSnippet"
-                    if (!processedMessageHashes.add(sig)) {
-                        return // Already processed
-                    }
-                }
-            }
-
+            
+            if (id.isNotBlank() && isDuplicate(id)) return
+            
             val msg = SignalingMessage(
                 type = type,
                 senderId = sender,
@@ -259,11 +135,11 @@ class WebRtcSignalingClient(
                 candidate = if (json.has("candidate")) json.getString("candidate") else null,
                 command = if (json.has("command")) json.getString("command") else null,
                 timestamp = json.optLong("timestamp", System.currentTimeMillis()),
-                id = if (id.isNotBlank()) id else java.util.UUID.randomUUID().toString()
+                id = if (id.isNotBlank()) id else UUID.randomUUID().toString()
             )
             onMessageReceived(msg)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse incoming signaling JSON", e)
+            Log.e(TAG, "Failed to parse incoming MQTT message", e)
         }
     }
 
@@ -283,56 +159,30 @@ class WebRtcSignalingClient(
                 msg.command?.let { put("command", it) }
                 put("timestamp", msg.timestamp)
             }
-
-            val jsonString = json.toString()
-
-            // 1. Send via primary ntfy.sh channel
-            val postUrl = "https://ntfy.sh/$sendTopic"
-            val requestBody = jsonString.toRequestBody("text/plain; charset=utf-8".toMediaType())
-            val request = Request.Builder()
-                .url(postUrl)
-                .post(requestBody)
-                .build()
-
-            httpClient.newCall(request).enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    Log.w(TAG, "Failed to POST ntfy signaling: ${e.message}")
-                }
-                override fun onResponse(call: Call, response: Response) {
-                    response.close()
-                }
-            })
-
-            // 2. For critical OFFER / ANSWER / ROOM_JOINED messages, also post to secondary Dweet relay
-            if (msg.type == "OFFER" || msg.type == "ANSWER" || msg.type == "ROOM_JOINED" || msg.type == "ICE_CANDIDATE") {
-                val dweetUrl = "https://dweet.cc/dweet/for/$sendTopic"
-                val dweetBodyObj = JSONObject().apply {
-                    put("payload", jsonString)
-                }
-                val dweetBody = dweetBodyObj.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-                val dweetReq = Request.Builder().url(dweetUrl).post(dweetBody).build()
-                httpClient.newCall(dweetReq).enqueue(object : Callback {
-                    override fun onFailure(call: Call, e: IOException) {}
-                    override fun onResponse(call: Call, response: Response) {
-                        response.close()
-                    }
-                })
+            
+            val payload = json.toString().toByteArray()
+            if (mqttClient?.isConnected == true) {
+                val mqttMsg = MqttMessage(payload).apply { qos = 1 }
+                mqttClient?.publish(sendTopic, mqttMsg)
+                Log.d(TAG, "Published ${msg.type} to $sendTopic (Size: ${payload.size} bytes)")
+            } else {
+                Log.w(TAG, "MQTT not connected, cannot send ${msg.type}")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error packaging signaling message", e)
+            Log.e(TAG, "Error sending MQTT message", e)
         }
     }
 
     fun stop() {
         isRunning = false
-        pollingJob?.cancel()
-        pollingJob = null
-        backupPollingJob?.cancel()
-        backupPollingJob = null
+        connectionJob?.cancel()
+        connectionJob = null
         try {
-            webSocket?.close(1000, "Normal closure")
+            mqttClient?.disconnect()
+            mqttClient?.close()
         } catch (_: Exception) {}
-        webSocket = null
-        processedMessageHashes.clear()
+        mqttClient = null
+        processedIds.clear()
+        processedIdsList.clear()
     }
 }

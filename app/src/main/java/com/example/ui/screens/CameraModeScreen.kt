@@ -1,115 +1,34 @@
 package com.example.ui.screens
 
 import android.app.Activity
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.view.WindowManager
-import androidx.camera.view.PreviewView
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Cameraswitch
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.FlashOff
-import androidx.compose.material.icons.filled.FlashOn
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.MotionPhotosOn
-import androidx.compose.material.icons.filled.Nightlight
-import androidx.compose.material.icons.filled.PhotoCamera
-import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.QrCode
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import android.app.PictureInPictureParams
-import android.os.Build
-import android.util.Rational
-import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.PictureInPicture
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import com.example.camera.CameraManager
-import com.example.data.model.CameraLens
-import com.example.ui.components.BatteryStatusChip
-import com.example.ui.components.LiveRecBadge
-import com.example.ui.components.MotionAlertBanner
 import com.example.ui.strings.AppLanguage
-import com.example.ui.strings.AppStrings
-import com.example.ui.theme.CctvAlertRed
-import com.example.ui.theme.CctvCardBg
-import com.example.ui.theme.CctvCardBgSecondary
-import com.example.ui.theme.CctvCardBorder
-import com.example.ui.theme.CctvDarkBg
-import com.example.ui.theme.CctvGlassBorder
-import com.example.ui.theme.CctvIceBlue
-import com.example.ui.theme.CctvNavyDark
-import com.example.ui.theme.CctvNavyHover
-import com.example.ui.theme.CctvNavyPrimary
-import com.example.ui.theme.CctvPrimaryCyan
-import com.example.ui.theme.CctvSecondaryBlue
-import com.example.ui.theme.CctvSuccessGreen
-import com.example.ui.theme.CctvTextMuted
-import com.example.ui.theme.CctvTextPrimary
-import com.example.ui.theme.CctvTextSecondary
-import com.example.ui.theme.CctvWarningAmber
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.CctvViewModel
-import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 @Composable
 fun CameraModeScreen(
@@ -118,560 +37,236 @@ fun CameraModeScreen(
     onStopCamera: () -> Unit
 ) {
     val context = LocalContext.current
-    val activity = context as? Activity
     val lifecycleOwner = LocalLifecycleOwner.current
-    val scope = rememberCoroutineScope()
-
-    val cameraId by viewModel.cameraId.collectAsState()
-    val cameraRoomPin by viewModel.cameraRoomPin.collectAsState()
-    val cameraIp by viewModel.cameraIp.collectAsState()
-    val cameraPort by viewModel.cameraPort.collectAsState()
+    val clipboardManager = LocalClipboardManager.current
+    
+    val roomPin by viewModel.cameraRoomPin.collectAsState()
+    val isStreaming by viewModel.isCameraStreaming.collectAsState()
     val connectedViewers by viewModel.connectedViewersCount.collectAsState()
-    val isMotionDetected by viewModel.isMotionDetected.collectAsState()
-    val isPowerSaverActive by viewModel.isPowerSaverActive.collectAsState()
-    val isAutoBlackout by viewModel.isAutoBlackoutEnabled.collectAsState()
-    val telemetry by viewModel.cameraTelemetry.collectAsState()
 
-    var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
-    var currentTime by remember { mutableStateOf("") }
-
+    // Start background CCTV service immediately on entering this screen
     LaunchedEffect(Unit) {
-        while (true) {
-            currentTime = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-            kotlinx.coroutines.delay(1000)
-        }
+        viewModel.startCameraMode(lifecycleOwner, null)
     }
-
-    // Set screen brightness to absolute minimum (0.01) when black screen / stealth mode is active
-    DisposableEffect(isPowerSaverActive) {
-        if (isPowerSaverActive) {
-            try {
-                activity?.window?.attributes = activity?.window?.attributes?.apply {
-                    screenBrightness = 0.01f
-                }
-            } catch (_: Exception) {}
-        } else {
-            try {
-                activity?.window?.attributes = activity?.window?.attributes?.apply {
-                    screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-                }
-            } catch (_: Exception) {}
-        }
-        onDispose {
-            try {
-                activity?.window?.attributes = activity?.window?.attributes?.apply {
-                    screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-                }
-            } catch (_: Exception) {}
-        }
-    }
-
-    // Note: Camera mode is explicitly stopped only when user clicks Stop Camera button
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(CctvDarkBg)
     ) {
-        // 1. Camera View Preview
-        AndroidView(
-            factory = { ctx ->
-                PreviewView(ctx).apply {
-                    previewViewRef = this
-                    viewModel.startCameraMode(lifecycleOwner, this)
-                }
-            },
-            modifier = Modifier
-                .fillMaxSize()
-                .testTag("camera_preview_view")
-        )
-
-        // 2. Camera HUD Overlay
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
+                .padding(24.dp)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Top HUD Cards
             Column(
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                // Header Bar with Sleek styling
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // 1. Status Indicator Badge
                 Surface(
-                    shape = RoundedCornerShape(24.dp),
-                    color = Color(0xE61A1C1E),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, CctvCardBorder),
-                    modifier = Modifier.fillMaxWidth()
+                    shape = RoundedCornerShape(30.dp),
+                    color = CctvCardBgSecondary,
+                    modifier = Modifier.padding(bottom = 24.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(12.dp)
+                                .clip(CircleShape)
+                                .background(if (connectedViewers > 0) CctvSuccessGreen else Color(0xFF00E676))
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (connectedViewers > 0) {
+                                if (language == AppLanguage.HINDI) "🟢 नया फोन लाइव देख रहा है" else "🟢 Viewer Connected (Live)"
+                            } else {
+                                if (language == AppLanguage.HINDI) "🟢 कैमरा 24x7 बैकग्राउंड में सक्रिय है" else "🟢 CCTV Active in Background"
+                            },
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+
+                // 2. Large Pairing Code Card
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, CctvCardBorder, RoundedCornerShape(20.dp)),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = CctvCardBg)
                 ) {
                     Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(CircleShape)
-                                        .background(CctvNavyPrimary)
-                                        .border(1.dp, CctvGlassBorder, CircleShape),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Videocam,
-                                        contentDescription = null,
-                                        tint = CctvIceBlue,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                                Column {
-                                    Text(
-                                        text = AppStrings.cameraActiveTitle(language),
-                                        style = MaterialTheme.typography.titleMedium.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            color = CctvTextPrimary
-                                        )
-                                    )
-                                    Text(
-                                        text = "BROADCASTING FEED",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = CctvIceBlue,
-                                            fontSize = 9.sp,
-                                            letterSpacing = 1.sp
-                                        )
-                                    )
-                                }
-                            }
-                            LiveRecBadge()
-                        }
+                        Text(
+                            text = if (language == AppLanguage.HINDI) "पेयरिंग कोड (ROOM PIN)" else "PAIRING CODE (ROOM PIN)",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = CctvTextMuted,
+                            letterSpacing = 1.5.sp
+                        )
 
-                        // WebRTC Mobile Data Room PIN Banner
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Large PIN display
                         Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = CctvNavyPrimary.copy(alpha = 0.5f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, CctvPrimaryCyan.copy(alpha = 0.6f)),
-                            modifier = Modifier.fillMaxWidth()
+                            shape = RoundedCornerShape(12.dp),
+                            color = CctvNavyDark,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(2.dp, CctvNavyPrimary, RoundedCornerShape(12.dp))
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = AppStrings.webrtcRoomCode(language),
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = CctvPrimaryCyan
-                                    )
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Text(
-                                            text = cameraRoomPin,
-                                            fontSize = 22.sp,
-                                            fontWeight = FontWeight.Black,
-                                            color = Color.White,
-                                            fontFamily = FontFamily.Monospace,
-                                            letterSpacing = 2.sp,
-                                            modifier = Modifier.testTag("camera_pin_display")
-                                        )
-                                        Text(
-                                            text = "(Internet P2P)",
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = CctvSuccessGreen
-                                        )
-                                    }
-                                }
-                                IconButton(
-                                    onClick = {
-                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                        val clip = ClipData.newPlainText("CCTV Room PIN", cameraRoomPin)
-                                        clipboard.setPrimaryClip(clip)
-                                        viewModel.showToast("Room PIN $cameraRoomPin Copied!")
-                                    },
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(CircleShape)
-                                        .background(CctvNavyHover)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.ContentCopy,
-                                        contentDescription = "Copy PIN",
-                                        tint = CctvIceBlue,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-                        }
-
-                        // Camera ID & Local IP Bar
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                        val clip = ClipData.newPlainText("CCTV IP", "$cameraIp:$cameraPort")
-                                        clipboard.setPrimaryClip(clip)
-                                        viewModel.showToast("IP $cameraIp:$cameraPort Copied!")
-                                    }
-                            ) {
-                                Text(
-                                    text = "LAN IP:",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = CctvTextSecondary
-                                )
-                                Text(
-                                    text = "$cameraIp:$cameraPort",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = CctvIceBlue,
-                                    fontFamily = FontFamily.Monospace,
-                                    modifier = Modifier.testTag("camera_id_display")
-                                )
-                                Icon(
-                                    imageVector = Icons.Default.ContentCopy,
-                                    contentDescription = "Copy IP",
-                                    tint = CctvIceBlue.copy(alpha = 0.7f),
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-
-                            BatteryStatusChip(
-                                level = telemetry.batteryLevel,
-                                isCharging = telemetry.isCharging
+                            Text(
+                                text = roomPin.chunked(3).joinToString(" "),
+                                fontSize = 38.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = CctvIceBlue,
+                                fontFamily = FontFamily.Monospace,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 16.dp)
                             )
                         }
 
-                        // Auto Blackout on Connect Banner
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isAutoBlackout) CctvNavyPrimary.copy(alpha = 0.4f) else CctvCardBgSecondary,
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (isAutoBlackout) CctvPrimaryCyan.copy(alpha = 0.5f) else CctvCardBorder
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { viewModel.toggleAutoBlackout() }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = if (isAutoBlackout) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                        contentDescription = null,
-                                        tint = if (isAutoBlackout) CctvPrimaryCyan else CctvTextSecondary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Text(
-                                        text = if (language == AppLanguage.HINDI) "कनेक्ट होते ही स्क्रीन बंद (Stealth Mode)" else "Auto Black Screen on Connect",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (isAutoBlackout) Color.White else CctvTextSecondary
-                                    )
-                                }
-                                Text(
-                                    text = if (isAutoBlackout) "ON" else "OFF",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isAutoBlackout) CctvPrimaryCyan else CctvTextMuted
-                                )
-                            }
-                        }
+                        Spacer(modifier = Modifier.height(16.dp))
 
-                        // Status Badge (Viewer connection status)
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = if (connectedViewers > 0) CctvSuccessGreen.copy(alpha = 0.15f) else CctvCardBgSecondary,
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (connectedViewers > 0) CctvSuccessGreen.copy(alpha = 0.6f) else CctvCardBorder
-                            ),
-                            modifier = Modifier.fillMaxWidth()
+                        // Copy PIN Button
+                        FilledTonalButton(
+                            onClick = {
+                                clipboardManager.setText(AnnotatedString(roomPin))
+                                Toast.makeText(
+                                    context,
+                                    if (language == AppLanguage.HINDI) "कोड कॉपी हो गया: $roomPin" else "PIN Copied: $roomPin",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = CctvCardBgSecondary,
+                                contentColor = CctvTextPrimary
+                            )
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(if (connectedViewers > 0) CctvSuccessGreen else CctvTextMuted)
-                                    )
-                                    Text(
-                                        text = if (connectedViewers > 0) AppStrings.viewerConnected(language) else AppStrings.waitingViewer(language),
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (connectedViewers > 0) CctvSuccessGreen else CctvTextSecondary,
-                                        modifier = Modifier.testTag("cam_status_text")
-                                    )
-                                }
-                                if (connectedViewers > 0) {
-                                    Text(
-                                        text = "$connectedViewers Client(s)",
-                                        fontSize = 11.sp,
-                                        color = CctvSuccessGreen,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Copy",
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (language == AppLanguage.HINDI) "कोड कॉपी करें" else "Copy PIN",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 }
 
-                // Motion Alert Banner
-                MotionAlertBanner(
-                    visible = isMotionDetected,
-                    text = AppStrings.motionAlertDetected(language)
-                )
-            }
+                Spacer(modifier = Modifier.height(20.dp))
 
-            // Bottom Controls Deck
-            Column(
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // Secondary Quick Bar (Flip, Torch, Motion, Siren, Snapshot)
-                Row(
+                // 3. Simple Guidance Card
+                Card(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    // Switch Camera
-                    IconButton(
-                        onClick = { viewModel.switchCameraLens(lifecycleOwner, previewViewRef) },
-                        modifier = Modifier
-                            .size(50.dp)
-                            .clip(CircleShape)
-                            .background(CctvCardBg)
-                            .border(1.dp, CctvCardBorder, CircleShape)
-                            .testTag("cam_switch_lens_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Cameraswitch,
-                            contentDescription = "Switch Camera",
-                            tint = CctvIceBlue,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-
-                    // Torch Toggle
-                    IconButton(
-                        onClick = { viewModel.toggleCameraTorch() },
-                        modifier = Modifier
-                            .size(50.dp)
-                            .clip(CircleShape)
-                            .background(if (viewModel.cameraManager.isTorchOn) CctvNavyPrimary else CctvCardBg)
-                            .border(1.dp, if (viewModel.cameraManager.isTorchOn) CctvIceBlue else CctvCardBorder, CircleShape)
-                            .testTag("cam_toggle_torch_btn")
-                    ) {
-                        Icon(
-                            imageVector = if (viewModel.cameraManager.isTorchOn) Icons.Default.FlashOn else Icons.Default.FlashOff,
-                            contentDescription = "Torch",
-                            tint = if (viewModel.cameraManager.isTorchOn) CctvIceBlue else CctvTextPrimary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-
-                    // Motion Detection Toggle
-                    IconButton(
-                        onClick = {
-                            val enabled = viewModel.toggleMotionDetection()
-                            viewModel.showToast(if (enabled) "Motion Detection ON" else "Motion Detection OFF")
-                        },
-                        modifier = Modifier
-                            .size(50.dp)
-                            .clip(CircleShape)
-                            .background(if (viewModel.cameraManager.motionDetectionEnabled) CctvSuccessGreen.copy(alpha = 0.25f) else CctvCardBg)
-                            .border(1.dp, if (viewModel.cameraManager.motionDetectionEnabled) CctvSuccessGreen else CctvCardBorder, CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MotionPhotosOn,
-                            contentDescription = "Motion Detection",
-                            tint = if (viewModel.cameraManager.motionDetectionEnabled) CctvSuccessGreen else CctvTextSecondary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-
-                    // Test Siren
-                    IconButton(
-                        onClick = { viewModel.toggleCameraSiren() },
-                        modifier = Modifier
-                            .size(50.dp)
-                            .clip(CircleShape)
-                            .background(if (viewModel.audioStreamManager.isSirenActive()) CctvAlertRed else CctvCardBg)
-                            .border(1.dp, if (viewModel.audioStreamManager.isSirenActive()) CctvAlertRed else CctvCardBorder, CircleShape)
-                            .testTag("cam_test_siren_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.VolumeUp,
-                            contentDescription = "Siren",
-                            tint = if (viewModel.audioStreamManager.isSirenActive()) Color.White else CctvAlertRed,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-
-                    // Local Snapshot
-                    IconButton(
-                        onClick = {
-                            scope.launch { viewModel.takeCameraLocalSnapshot() }
-                        },
-                        modifier = Modifier
-                            .size(50.dp)
-                            .clip(CircleShape)
-                            .background(CctvCardBg)
-                            .border(1.dp, CctvCardBorder, CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PhotoCamera,
-                            contentDescription = "Snapshot",
-                            tint = CctvIceBlue,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
-
-                // Run in Background & Multitask Button
-                Button(
-                    onClick = {
-                        viewModel.showToast(AppStrings.backgroundActiveToast(language))
-                        viewModel.setPowerSaver(false)
-                        try {
-                            activity?.moveTaskToBack(true)
-                        } catch (_: Exception) {}
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .testTag("run_in_background_btn"),
                     shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = CctvNavyPrimary,
-                        contentColor = Color.White
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(1.5.dp, CctvPrimaryCyan)
+                    colors = CardDefaults.cardColors(containerColor = CctvCardBg.copy(alpha = 0.6f))
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Apps,
-                        contentDescription = null,
-                        tint = CctvPrimaryCyan,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = AppStrings.runInBackgroundBtn(language),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                }
-
-                // Primary Bottom Buttons (Power Saver & Stop Camera)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = { viewModel.togglePowerSaver() },
+                    Column(
                         modifier = Modifier
-                            .weight(1f)
-                            .height(52.dp)
-                            .testTag("power_saver_button"),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = CctvCardBg,
-                            contentColor = CctvIceBlue
-                        ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, CctvCardBorder)
+                            .fillMaxWidth()
+                            .padding(18.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Nightlight,
-                            contentDescription = null,
-                            tint = CctvIceBlue,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = AppStrings.powerSaverBtn(language),
-                            fontSize = 13.sp,
+                            text = if (language == AppLanguage.HINDI) "आगे क्या करना है:" else "What to do next:",
+                            fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             color = CctvIceBlue
                         )
-                    }
-
-                    Button(
-                        onClick = onStopCamera,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(52.dp)
-                            .testTag("stop_camera_button"),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = CctvAlertRed,
-                            contentColor = Color.White
-                        )
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PowerSettingsNew,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = AppStrings.stopCamera(language),
+                            text = if (language == AppLanguage.HINDI)
+                                "1. यह 6-अंकों का कोड अपने नए फोन (Viewer) में डालें।\n\n2. कोड डालने के बाद आप इस पुराने फोन की ऐप को बंद कर सकते हैं या स्क्रीन ऑफ कर सकते हैं।\n\n3. नया फोन जब भी चाहेगा, तुरंत लाइव वीडियो देख सकेगा। फोन रीस्टार्ट होने पर भी यह अपने आप बैकग्राउंड में चालू रहेगा।"
+                            else
+                                "1. Enter this 6-digit PIN in your New Phone (Viewer Mode).\n\n2. After setting up, you can exit this app or lock the screen.\n\n3. The camera stays ready 24/7 in the background and starts streaming the instant the new phone connects.",
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
+                            lineHeight = 19.sp,
+                            color = CctvTextSecondary
                         )
                     }
                 }
             }
-        }
 
-        // 3. Black Screen / Power Saver Stealth Overlay (100% Black with absolutely nothing on screen)
-        if (isPowerSaverActive) {
-            Box(
+            // 4. Bottom Action Buttons
+            Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        viewModel.togglePowerSaver()
-                    }
-                    .testTag("black_screen_power_saver_overlay")
-            )
+                    .fillMaxWidth()
+                    .padding(top = 24.dp, bottom = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Button to minimize app & run silently in background
+                Button(
+                    onClick = {
+                        Toast.makeText(
+                            context,
+                            if (language == AppLanguage.HINDI) "कैमरा बैकग्राउंड में 24 घंटे चालू रहेगा" else "CCTV Camera running 24/7 in background",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        (context as? Activity)?.moveTaskToBack(true)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CctvSuccessGreen,
+                        contentColor = Color.White
+                    )
+                ) {
+                    Icon(Icons.Default.ExitToApp, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = if (language == AppLanguage.HINDI) "ऐप से बाहर आएं (बैकग्राउंड में चालू रहेगा)" else "Minimize (Runs in Background)",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Stop Camera Button
+                OutlinedButton(
+                    onClick = {
+                        onStopCamera()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = CctvAlertRed
+                    )
+                ) {
+                    Icon(Icons.Default.Stop, contentDescription = null, tint = CctvAlertRed, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (language == AppLanguage.HINDI) "कैमरा बंद करें (Stop Camera)" else "Stop Camera",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = CctvAlertRed
+                    )
+                }
+            }
         }
     }
 }

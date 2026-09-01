@@ -61,7 +61,7 @@ fun WebRtcVideoPlayer(
             factory = { context ->
                 SurfaceViewRenderer(context).apply {
                     init(eglBase.eglBaseContext, null)
-                    setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+                    setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
                     setMirror(isMirror)
                     setEnableHardwareScaler(true)
                     videoTrack?.addSink(this)

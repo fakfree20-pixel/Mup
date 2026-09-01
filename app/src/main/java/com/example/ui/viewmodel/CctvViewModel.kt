@@ -42,11 +42,50 @@ import java.util.Locale
 import java.util.Random
 
 class CctvViewModel(application: Application) : AndroidViewModel(application) {
+    companion object {
+        var isCameraModeActive = false
+        var cameraManagerInstance: com.example.camera.CameraManager? = null
+        var audioStreamManagerInstance: com.example.camera.AudioStreamManager? = null
+        var cameraWebRtcSessionInstance: com.example.webrtc.WebRtcSessionManager? = null
+        var httpServerInstance: com.example.network.CctvHttpServer? = null
+        var batteryMonitorInstance: com.example.camera.BatteryMonitor? = null
+        var backgroundLifecycleOwnerInstance: AlwaysActiveLifecycleOwner? = null
+        val backgroundScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
+    }
+
     private val TAG = "CctvViewModel"
+
+    private var backgroundLifecycleOwner: AlwaysActiveLifecycleOwner?
+        get() = backgroundLifecycleOwnerInstance
+        set(value) { backgroundLifecycleOwnerInstance = value }
+
+    val cameraManager: com.example.camera.CameraManager
+        get() {
+            if (cameraManagerInstance == null) cameraManagerInstance = com.example.camera.CameraManager(getApplication())
+            return cameraManagerInstance!!
+        }
+
+    val audioStreamManager: com.example.camera.AudioStreamManager
+        get() {
+            if (audioStreamManagerInstance == null) audioStreamManagerInstance = com.example.camera.AudioStreamManager(getApplication())
+            return audioStreamManagerInstance!!
+        }
+
+    private var batteryMonitor: com.example.camera.BatteryMonitor?
+        get() = batteryMonitorInstance
+        set(value) { batteryMonitorInstance = value }
+
+    private var httpServer: com.example.network.CctvHttpServer?
+        get() = httpServerInstance
+        set(value) { httpServerInstance = value }
+
+    var cameraWebRtcSession: com.example.webrtc.WebRtcSessionManager?
+        get() = cameraWebRtcSessionInstance
+        private set(value) { cameraWebRtcSessionInstance = value }
+
     private val db = AppDatabase.getDatabase(application)
     private val dao = db.cctvDao()
 
-    private var backgroundLifecycleOwner: AlwaysActiveLifecycleOwner? = null
 
     class AlwaysActiveLifecycleOwner : LifecycleOwner {
         private val registry = androidx.lifecycle.LifecycleRegistry(this)
@@ -77,11 +116,31 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     private val _language = MutableStateFlow(AppLanguage.HINDI)
     val language: StateFlow<AppLanguage> = _language
 
+    private val prefs = application.getSharedPreferences(com.example.receiver.BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+
+    private fun getOrCreateRoomPin(): String {
+        var pin = prefs.getString(com.example.receiver.BootReceiver.KEY_ROOM_PIN, null)
+        if (pin.isNullOrBlank()) {
+            pin = (100000 + Random().nextInt(900000)).toString()
+            prefs.edit().putString(com.example.receiver.BootReceiver.KEY_ROOM_PIN, pin).apply()
+        }
+        return pin
+    }
+
+    private fun getOrCreateCameraId(): String {
+        var id = prefs.getString(com.example.receiver.BootReceiver.KEY_CAM_ID, null)
+        if (id.isNullOrBlank()) {
+            id = "CAM-" + (1000 + Random().nextInt(9000))
+            prefs.edit().putString(com.example.receiver.BootReceiver.KEY_CAM_ID, id).apply()
+        }
+        return id
+    }
+
     // --- CAMERA MODE STATE (Old Phone) ---
-    private val _cameraId = MutableStateFlow("CAM-" + (1000 + Random().nextInt(9000)))
+    private val _cameraId = MutableStateFlow(getOrCreateCameraId())
     val cameraId: StateFlow<String> = _cameraId
 
-    private val _cameraRoomPin = MutableStateFlow((100000 + Random().nextInt(900000)).toString())
+    private val _cameraRoomPin = MutableStateFlow(getOrCreateRoomPin())
     val cameraRoomPin: StateFlow<String> = _cameraRoomPin
 
     private val _cameraIp = MutableStateFlow("127.0.0.1")
@@ -106,13 +165,12 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     val cameraTelemetry: StateFlow<CameraTelemetry> = _cameraTelemetry
 
     // Camera & Audio engines
-    val cameraManager = CameraManager(application)
-    val audioStreamManager = AudioStreamManager(application)
-    private var batteryMonitor: BatteryMonitor? = null
-    private var httpServer: CctvHttpServer? = null
+    
+    
+    
+    
     private val discovery = CctvDiscovery(application)
-    var cameraWebRtcSession: WebRtcSessionManager? = null
-        private set
+    
 
     // --- VIEWER MODE STATE (New Phone) ---
     val cctvClient = CctvClient()
@@ -151,7 +209,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         // Setup battery monitoring
-        batteryMonitor = BatteryMonitor(application) { level, isCharging ->
+        batteryMonitor = com.example.camera.BatteryMonitor(getApplication()) { level, isCharging ->
             _cameraTelemetry.value = _cameraTelemetry.value.copy(
                 batteryLevel = level,
                 isCharging = isCharging
@@ -222,34 +280,11 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             backgroundLifecycleOwner = it
         }
 
-        // 1. Setup CameraX for local display & motion analysis
-        cameraManager.startCamera(activeOwner, previewView) {
-            _isCameraStreaming.value = true
-        }
-
-        // 2. Setup Motion Detection Callback
-        cameraManager.onMotionDetected = { pct ->
-            _isMotionDetected.value = true
-            _cameraTelemetry.value = _cameraTelemetry.value.copy(
-                motionDetected = true,
-                motionCount = _cameraTelemetry.value.motionCount + 1
-            )
-            viewModelScope.launch {
-                dao.insertSecurityEvent(
-                    SecurityEvent(
-                        cameraId = _cameraId.value,
-                        eventType = "MOTION_DETECTED",
-                        description = "Motion detected (${pct.toInt()}% change)"
-                    )
-                )
-                delay(3000)
-                _isMotionDetected.value = false
-                _cameraTelemetry.value = _cameraTelemetry.value.copy(motionDetected = false)
-            }
-        }
-
-        // 3. Audio manager
-        audioStreamManager.startMicrophoneStreaming(viewModelScope)
+        // Note: We intentionally DO NOT start CameraX or AudioStreamManager here.
+        // This is to maintain absolute stealth (no green privacy dots on Android 12+) 
+        // until a Viewer actually connects. WebRTC will open the camera and mic 
+        // ONLY when the viewer joins.
+        _isCameraStreaming.value = true
 
         // 4. Start WebRTC Session for Mobile Data / Cellular P2P low latency
         cameraWebRtcSession = WebRtcSessionManager(
@@ -260,13 +295,13 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 handleRemoteCommand(action, lifecycleOwner, previewView)
             }
             startSession(
-                scope = viewModelScope,
+                scope = backgroundScope,
                 roomId = _cameraRoomPin.value,
                 isFrontCamera = (cameraManager.currentLens == CameraLens.FRONT)
             )
         }
 
-        viewModelScope.launch {
+        backgroundScope.launch {
             cameraWebRtcSession?.connectionState?.collect { state ->
                 if (state == WebRtcConnectionState.CONNECTED) {
                     _connectedViewersCount.value = 1
@@ -304,7 +339,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 cameraManager.latestJpegFrame
             }
         ).apply {
-            val boundPort = start(viewModelScope)
+            val boundPort = start(backgroundScope)
             _cameraPort.value = boundPort
             onClientCountChanged = { count ->
                 _connectedViewersCount.value = count
@@ -326,7 +361,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
 
         // 6. Start UDP Beacon for instant Viewer Auto-Discovery on LAN
         discovery.startBroadcasting(
-            scope = viewModelScope,
+            scope = backgroundScope,
             cameraId = _cameraId.value,
             port = _cameraPort.value,
             deviceName = android.os.Build.MODEL ?: "CCTV Camera"
@@ -340,21 +375,32 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     ): String {
         return when (action) {
             "SWITCH_CAMERA" -> {
-                viewModelScope.launch(Dispatchers.Main) {
+                backgroundScope.launch(Dispatchers.Main) {
                     cameraManager.switchCamera(lifecycleOwner, previewView)
                     cameraWebRtcSession?.switchCamera(cameraManager.currentLens == CameraLens.FRONT)
                 }
                 "Switched to ${cameraManager.currentLens}"
             }
-            "TOGGLE_TORCH" -> {
-                val state = cameraManager.toggleTorch()
-                "Torch set to $state"
+                        "TOGGLE_TORCH" -> {
+                try {
+                    val camManager = getApplication<Application>().getSystemService(android.content.Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+                    val camId = camManager.cameraIdList[0] // Assume back camera is 0
+                    val isCurrentlyOn = cameraManager.isTorchOn
+                    camManager.setTorchMode(camId, !isCurrentlyOn)
+                    cameraManager.setTorch(!isCurrentlyOn) // update state
+                    "Torch toggled via CameraManager API"
+                } catch (e: Exception) {
+                    android.util.Log.e("CctvViewModel", "Torch toggle failed", e)
+                    // fallback to CameraX
+                    val state = cameraManager.toggleTorch()
+                    "Torch set to $state"
+                }
             }
             "TOGGLE_MIC" -> {
                 "Mic toggled"
             }
             "TRIGGER_SIREN" -> {
-                audioStreamManager.startSiren(viewModelScope)
+                audioStreamManager.startSiren(backgroundScope)
                 "Siren started"
             }
             "STOP_SIREN" -> {
@@ -362,7 +408,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 "Siren stopped"
             }
             "TAKE_SNAPSHOT" -> {
-                viewModelScope.launch {
+                backgroundScope.launch {
                     takeCameraLocalSnapshot()
                 }
                 "Snapshot taken"
@@ -409,7 +455,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         if (audioStreamManager.isSirenActive()) {
             audioStreamManager.stopSiren()
         } else {
-            audioStreamManager.startSiren(viewModelScope)
+            audioStreamManager.startSiren(backgroundScope)
         }
     }
 
@@ -475,7 +521,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             isCameraMode = false
         ).apply {
             startSession(
-                scope = viewModelScope,
+                scope = backgroundScope,
                 roomId = cleanPin
             )
         }
@@ -711,7 +757,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
-        stopCameraMode()
+        // DO NOT stop camera mode here! Let it run in the background.
         disconnectViewer()
     }
 }

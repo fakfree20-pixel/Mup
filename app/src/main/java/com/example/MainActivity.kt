@@ -66,6 +66,17 @@ fun CctvApp(viewModel: CctvViewModel) {
     val scope = rememberCoroutineScope()
 
     // Permission launcher for Camera & Mic
+
+    val viewerPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            viewModel.selectRole(AppRole.VIEWER_DEVICE)
+        } else {
+            Toast.makeText(context, "Microphone permission is required for Two-Way Audio", Toast.LENGTH_SHORT).show()
+            viewModel.selectRole(AppRole.VIEWER_DEVICE) // Still allow viewer, just no mic
+        }
+    }
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -117,17 +128,12 @@ fun CctvApp(viewModel: CctvViewModel) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
-            if (currentRole != AppRole.CAMERA_DEVICE || !viewModel.isPowerSaverActive.collectAsState().value) {
+            if (currentRole == AppRole.SELECTION || currentRole == AppRole.SNAPSHOTS_GALLERY) {
                 CctvTopBar(
                     title = title,
                     language = language,
                     showBack = showBack,
                     onBackClick = {
-                        if (currentRole == AppRole.CAMERA_DEVICE) {
-                            viewModel.stopCameraMode()
-                        } else if (currentRole == AppRole.VIEWER_DEVICE) {
-                            viewModel.disconnectViewer()
-                        }
                         viewModel.selectRole(AppRole.SELECTION)
                     },
                     onLanguageToggle = { viewModel.toggleLanguage() },
@@ -141,7 +147,7 @@ fun CctvApp(viewModel: CctvViewModel) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(if (currentRole == AppRole.CAMERA_DEVICE && viewModel.isPowerSaverActive.collectAsState().value) androidx.compose.foundation.layout.PaddingValues() else innerPadding)
+                .padding(if (currentRole == AppRole.SELECTION || currentRole == AppRole.SNAPSHOTS_GALLERY) innerPadding else androidx.compose.foundation.layout.PaddingValues())
         ) {
             when (currentRole) {
                 AppRole.SELECTION -> {
@@ -151,7 +157,17 @@ fun CctvApp(viewModel: CctvViewModel) {
                             if (role == AppRole.CAMERA_DEVICE) {
                                 requestPermissionsAndStartCamera()
                             } else {
-                                viewModel.selectRole(role)
+
+                                if (role == AppRole.VIEWER_DEVICE) {
+                                    val hasAudio = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                                    if (hasAudio) {
+                                        viewModel.selectRole(role)
+                                    } else {
+                                        viewerPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    }
+                                } else {
+                                    viewModel.selectRole(role)
+                                }
                             }
                         },
                         onOpenGallery = {
