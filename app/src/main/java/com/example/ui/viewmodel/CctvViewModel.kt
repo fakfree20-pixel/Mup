@@ -632,7 +632,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             }
             action == "VIEWER_DISCONNECT" || action == "STOP_STREAM" -> {
                 _connectedViewersCount.value = 0
-                cameraWebRtcSession?.stopCameraHardware()
+                backgroundScope.launch { cameraWebRtcSession?.stopCameraHardware() }
                 try {
                     cameraManager.setTorch(false)
                 } catch (_: Exception) {}

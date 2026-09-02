@@ -18,6 +18,11 @@ class WebRtcSessionManager(
     private val context: Context,
     val isCameraMode: Boolean
 ) {
+    companion object {
+        @Volatile
+        var isWebRtcInitialized = false
+    }
+    
     private val TAG = "WebRtcSessionManager"
 
     // Root EGL Base for OpenGL hardware video textures
@@ -153,10 +158,15 @@ class WebRtcSessionManager(
     }
 
     private fun initializePeerConnectionFactory() {
-        val options = PeerConnectionFactory.InitializationOptions.builder(context)
-            .setEnableInternalTracer(false)
-            .createInitializationOptions()
-        PeerConnectionFactory.initialize(options)
+        synchronized(WebRtcSessionManager::class.java) {
+            if (!isWebRtcInitialized) {
+                val options = PeerConnectionFactory.InitializationOptions.builder(context.applicationContext)
+                    .setEnableInternalTracer(false)
+                    .createInitializationOptions()
+                PeerConnectionFactory.initialize(options)
+                isWebRtcInitialized = true
+            }
+        }
 
         val encoderFactory = DefaultVideoEncoderFactory(
             rootEglBase.eglBaseContext,
@@ -168,7 +178,13 @@ class WebRtcSessionManager(
         val isAecSupported = JavaAudioDeviceModule.isBuiltInAcousticEchoCancelerSupported()
         val isNsSupported = JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported()
 
+        val audioAttributes = android.media.AudioAttributes.Builder()
+            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+
         audioDeviceModule = JavaAudioDeviceModule.builder(context)
+            .setAudioAttributes(audioAttributes)
             .setUseHardwareAcousticEchoCanceler(isAecSupported)
             .setUseHardwareNoiseSuppressor(isNsSupported)
             .createAudioDeviceModule()
@@ -373,7 +389,7 @@ class WebRtcSessionManager(
                     Log.d(TAG, "onTrack: Received remote AudioTrack")
                     try {
                         track.setEnabled(true)
-                        track.setVolume(10.0)
+                        track.setVolume(1.0)
                     } catch (e: Exception) {
                         Log.w(TAG, "Error setting volume on remote audio track: ${e.message}")
                     }
@@ -759,7 +775,7 @@ class WebRtcSessionManager(
             "ROOM_LEFT", "LEAVE", "VIEWER_DISCONNECT", "STOP_STREAM" -> {
                 if (isCameraMode) {
                     Log.d(TAG, "Viewer left room, releasing camera hardware and entering standby")
-                    stopCameraHardware()
+                    executor.submit { stopCameraHardware() }
                 }
             }
             "OFFER" -> {
@@ -826,7 +842,7 @@ class WebRtcSessionManager(
                 msg.command?.let { cmd ->
                     if (isCameraMode && (cmd == "VIEWER_DISCONNECT" || cmd == "STOP_STREAM")) {
                         Log.d(TAG, "Received VIEWER_DISCONNECT command, stopping camera hardware")
-                        stopCameraHardware()
+                        executor.submit { stopCameraHardware() }
                     }
                     onCommandReceived?.invoke(cmd)
                 }
