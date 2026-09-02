@@ -99,7 +99,7 @@ class WebRtcSignalingClient(
      * HTTPS Real-time event stream via ntfy.sh (Port 443 - zero block on STC/Lebara/Airtel).
      */
     private suspend fun startHttpsStream() {
-        val streamUrl = "https://ntfy.sh/$listenTopic/json?since=10s"
+        val streamUrl = "https://ntfy.sh/$listenTopic/json?since=now"
         Log.d(TAG, "Starting HTTPS signaling stream on $streamUrl")
 
         while (isRunning) {
@@ -141,7 +141,7 @@ class WebRtcSignalingClient(
      * Regular poll fallback every 3.5 seconds to guarantee connection even if SSE breaks
      */
     private suspend fun startHttpPollingLoop() {
-        val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=5s"
+        val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=now"
         while (isRunning) {
             try {
                 val request = Request.Builder()
@@ -236,6 +236,7 @@ class WebRtcSignalingClient(
             val sender = json.optString("senderId")
             val timestamp = json.optLong("timestamp", System.currentTimeMillis())
 
+            if (timestamp < sessionStartTime - 3000) return
             if (sender.equals(clientRole, ignoreCase = true)) return
             if (id.isNotBlank() && isDuplicate(id)) return
 

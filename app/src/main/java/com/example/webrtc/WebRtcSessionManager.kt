@@ -131,6 +131,7 @@ class WebRtcSessionManager(
             audioManager?.let { am ->
                 am.mode = AudioManager.MODE_IN_COMMUNICATION
                 am.isSpeakerphoneOn = true
+                am.setSpeakerphoneOn(true)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to configure AudioManager: ${e.message}")
@@ -266,6 +267,7 @@ class WebRtcSessionManager(
                         PeerConnection.IceConnectionState.COMPLETED -> {
                             _connectionState.value = WebRtcConnectionState.CONNECTED
                             _statusText.value = "● Live Stream Connected"
+                            configureAudioManager()
                         }
                         PeerConnection.IceConnectionState.DISCONNECTED -> {
                             _connectionState.value = WebRtcConnectionState.DISCONNECTED
