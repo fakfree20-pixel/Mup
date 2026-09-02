@@ -403,6 +403,17 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             onCommandReceived = { action ->
                 handleRemoteCommand(action, lifecycleOwner, previewView)
             }
+            onViewerConnected = {
+                _connectedViewersCount.value = 1
+                broadcastCurrentTelemetry()
+                if (_isAutoBlackoutEnabled.value) {
+                    _isPowerSaverActive.value = true
+                }
+            }
+            onViewerDisconnected = {
+                _connectedViewersCount.value = 0
+                broadcastCurrentTelemetry()
+            }
             startSession(
                 scope = backgroundScope,
                 roomId = _cameraRoomPin.value,
@@ -415,12 +426,23 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
 
         backgroundScope.launch {
             cameraWebRtcSession?.connectionState?.collect { state ->
-                if (state == WebRtcConnectionState.CONNECTED) {
-                    _connectedViewersCount.value = 1
-                    broadcastCurrentTelemetry()
-                    if (_isAutoBlackoutEnabled.value) {
-                        _isPowerSaverActive.value = true
+                when (state) {
+                    WebRtcConnectionState.CONNECTED -> {
+                        _connectedViewersCount.value = 1
+                        broadcastCurrentTelemetry()
+                        if (_isAutoBlackoutEnabled.value) {
+                            _isPowerSaverActive.value = true
+                        }
                     }
+                    WebRtcConnectionState.WAITING_PEER,
+                    WebRtcConnectionState.DISCONNECTED,
+                    WebRtcConnectionState.FAILED -> {
+                        if (cameraWebRtcSession?.isCameraActive != true) {
+                            _connectedViewersCount.value = 0
+                            broadcastCurrentTelemetry()
+                        }
+                    }
+                    else -> {}
                 }
             }
         }
@@ -608,6 +630,19 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 cameraWebRtcSession?.enableLocalVideo(true)
                 "Video resumed"
             }
+            action == "VIEWER_DISCONNECT" || action == "STOP_STREAM" -> {
+                _connectedViewersCount.value = 0
+                cameraWebRtcSession?.stopCameraHardware()
+                try {
+                    cameraManager.setTorch(false)
+                } catch (_: Exception) {}
+                "Viewer disconnected, camera hardware returned to silent standby"
+            }
+            action == "START_STREAM" || action == "VIEWER_CONNECT" -> {
+                _connectedViewersCount.value = 1
+                cameraWebRtcSession?.startCameraHardware(cameraManager.currentLens == CameraLens.FRONT)
+                "Camera hardware activated on demand"
+            }
             else -> "Unknown command: $action"
         }
         // Broadcast state update immediately
@@ -783,6 +818,10 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         _isViewerWebRtcActive.value = false
         _webRtcStatus.value = "Disconnected"
         backgroundScope.launch {
+            try {
+                session?.sendCommand("VIEWER_DISCONNECT")
+                delay(150)
+            } catch (_: Exception) {}
             session?.release()
         }
     }
@@ -866,7 +905,14 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
 
     fun disconnectViewer() {
         disconnectWebRtc()
-        cctvClient.disconnect()
+        viewModelScope.launch {
+            try {
+                cctvClient.sendCommand("VIEWER_DISCONNECT")
+            } catch (_: Exception) {}
+            cctvClient.disconnect()
+        }
+        _isViewerMicTalking.value = false
+        _isAudioOnlyMode.value = false
         discovery.stopListening()
     }
 

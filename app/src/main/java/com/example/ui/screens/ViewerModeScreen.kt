@@ -80,6 +80,16 @@ fun ViewerModeScreen(
         webRtcConnState == WebRtcConnectionState.CONNECTING_P2P
     ))
 
+    androidx.activity.compose.BackHandler(enabled = isAnyConnected || isAttemptingConnection) {
+        viewModel.disconnectViewer()
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.disconnectViewer()
+        }
+    }
+
     // If there's a saved camera and not connected yet, pre-fill PIN
     LaunchedEffect(savedCameras) {
         if (savedCameras.isNotEmpty() && roomPinInput.isBlank()) {
@@ -173,7 +183,7 @@ fun ViewerModeScreen(
                     // Close/Disconnect Button
                     IconButton(
                         onClick = { 
-                            if (isViewerWebRtcActive) viewModel.disconnectWebRtc() else viewModel.disconnectViewer()
+                            viewModel.disconnectViewer()
                         },
                         modifier = Modifier.size(44.dp).background(Color(0x77000000), CircleShape)
                     ) {

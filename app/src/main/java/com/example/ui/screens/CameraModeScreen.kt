@@ -286,14 +286,14 @@ fun CameraModeScreen(
                                 modifier = Modifier
                                     .size(10.dp)
                                     .clip(CircleShape)
-                                    .background(if (connectedViewers > 0) CctvSuccessGreen else Color(0xFF00E676))
+                                    .background(if (connectedViewers > 0) Color(0xFFFF1744) else Color(0xFF00E676))
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = if (connectedViewers > 0) {
-                                    if (language == AppLanguage.HINDI) "🟢 लाइव चल रहा है" else "🟢 Live Stream Active"
+                                    if (language == AppLanguage.HINDI) "🔴 लाइव स्ट्रीम चालू (कैमरा सक्रिय)" else "🔴 Live Streaming (Camera ON)"
                                 } else {
-                                    if (language == AppLanguage.HINDI) "🟢 बैकग्राउंड में सक्रिय" else "🟢 Active 24x7"
+                                    if (language == AppLanguage.HINDI) "💤 स्टैंडबाय (कैमरा हार्डवेयर बंद)" else "💤 Standby (Camera Hardware OFF)"
                                 },
                                 color = Color.White,
                                 fontSize = 13.sp,
@@ -481,9 +481,9 @@ fun CameraModeScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = if (language == AppLanguage.HINDI)
-                                "1. यह 6-अंकों का कोड अपने नए फोन (Viewer) में डालें।\n\n2. कोड डालने के बाद आप इस पुराने फोन की ऐप को बंद कर सकते हैं या स्क्रीन ऑफ कर सकते हैं।\n\n3. नया फोन जब भी चाहेगा, तुरंत लाइव वीडियो देख सकेगा। फोन रीस्टार्ट होने पर भी यह अपने आप बैकग्राउंड में चालू रहेगा।"
+                                "1. यह 6-अंकों का कोड अपने नए फोन (Viewer Mode) में डालें।\n\n2. जब तक नया फोन नहीं देखता, इस पुराने फोन का कैमरा हार्डवेयर और माइक पूरी तरह बंद (Standby) रहेगा, जिससे कोई कैमरा आइकॉन नहीं आएगा और बैटरी बचेगी।\n\n3. जैसे ही नया फोन कनेक्ट करेगा, कैमरा अपने आप चालू हो जाएगा और नया फोन कट/बंद करते ही तुरंत बंद हो जाएगा।"
                             else
-                                "1. Enter this 6-digit PIN in your New Phone (Viewer Mode).\n\n2. After setting up, you can exit this app or lock the screen.\n\n3. The camera stays ready 24/7 in the background and starts streaming the instant the new phone connects.",
+                                "1. Enter this 6-digit PIN in your New Phone (Viewer Mode).\n\n2. While waiting, camera hardware & mic stay completely OFF in silent Standby (no privacy green dots or camera icon).\n\n3. Camera turns ON only when the Viewer connects and turns OFF immediately when Viewer disconnects.",
                             fontSize = 13.sp,
                             lineHeight = 19.sp,
                             color = CctvTextSecondary

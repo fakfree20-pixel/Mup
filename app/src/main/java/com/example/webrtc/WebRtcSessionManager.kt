@@ -55,6 +55,12 @@ class WebRtcSessionManager(
     // Callbacks
     var onCommandReceived: ((String) -> Unit)? = null
     var onRemoteSnapshotRequested: (() -> Unit)? = null
+    var onViewerConnected: (() -> Unit)? = null
+    var onViewerDisconnected: (() -> Unit)? = null
+
+    @Volatile
+    private var isCameraHardwareActive = false
+    val isCameraActive: Boolean get() = isCameraHardwareActive
 
     /**
      * Worldwide Global STUN & TURN Relay Infrastructure:
@@ -201,20 +207,16 @@ class WebRtcSessionManager(
         }
 
         if (isCameraMode) {
-            setupCameraMediaTracks(currentIsFrontCamera)
-            _statusText.value = "Camera is live. Waiting for Viewer..."
-            
-            scope.launch(Dispatchers.IO) {
-                delay(500)
-                createAndSendOffer(roomId)
-            }
+            _connectionState.value = WebRtcConnectionState.WAITING_PEER
+            _statusText.value = "Standby: Waiting for Viewer to connect..."
+            // Camera hardware will open ONLY when Viewer connects (ROOM_JOINED)
         } else {
             setupViewerMediaTracks()
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
             _statusText.value = "Connecting to Camera..."
 
             scope.launch(Dispatchers.IO) {
-                delay(400)
+                delay(300)
                 signalingClient?.sendMessage(
                     SignalingMessage(
                         type = "ROOM_JOINED",
@@ -279,16 +281,38 @@ class WebRtcSessionManager(
                             _connectionState.value = WebRtcConnectionState.CONNECTED
                             _statusText.value = "● Live Stream Connected"
                             configureAudioManager()
+                            if (isCameraMode) {
+                                onViewerConnected?.invoke()
+                            }
                         }
                         PeerConnection.IceConnectionState.DISCONNECTED -> {
                             _connectionState.value = WebRtcConnectionState.DISCONNECTED
-                            _statusText.value = "Network changed. Re-establishing..."
+                            _statusText.value = "Viewer disconnected. Re-establishing..."
+                            if (isCameraMode) {
+                                scope.launch(Dispatchers.IO) {
+                                    delay(4000)
+                                    if (_connectionState.value == WebRtcConnectionState.DISCONNECTED) {
+                                        Log.d(TAG, "Disconnected for 4s, stopping camera hardware for standby")
+                                        stopCameraHardware()
+                                    }
+                                }
+                            }
                         }
-                        PeerConnection.IceConnectionState.FAILED -> {
+                        PeerConnection.IceConnectionState.FAILED,
+                        PeerConnection.IceConnectionState.CLOSED -> {
                             _connectionState.value = WebRtcConnectionState.FAILED
-                            _statusText.value = "Reconnecting via global relay..."
-                            // Auto restart ICE on failure
-                            peerConnection?.restartIce()
+                            _statusText.value = "Connection closed"
+                            if (isCameraMode) {
+                                scope.launch(Dispatchers.IO) {
+                                    delay(2000)
+                                    if (_connectionState.value != WebRtcConnectionState.CONNECTED) {
+                                        Log.d(TAG, "Connection failed/closed, returning to standby")
+                                        stopCameraHardware()
+                                    }
+                                }
+                            } else {
+                                peerConnection?.restartIce()
+                            }
                         }
                         PeerConnection.IceConnectionState.CHECKING -> {
                             _connectionState.value = WebRtcConnectionState.CONNECTING_P2P
@@ -412,26 +436,39 @@ class WebRtcSessionManager(
         peerConnection?.addTrack(localAudioTrack, listOf("viewer_audio"))
     }
 
-    private fun setupCameraMediaTracks(isFrontCamera: Boolean) {
+    @Synchronized
+    fun startCameraHardware(isFrontCamera: Boolean) {
+        if (!isCameraMode) return
+        if (isCameraHardwareActive && videoCapturer != null) {
+            Log.d(TAG, "Camera hardware already running")
+            return
+        }
+
         val factory = peerConnectionFactory ?: return
+        Log.d(TAG, "Opening camera hardware and mic on-demand...")
 
         try {
-            if (localVideoTrack == null) {
+            if (surfaceTextureHelper == null) {
                 surfaceTextureHelper = SurfaceTextureHelper.create("WebRtcCaptureThread", rootEglBase.eglBaseContext)
+            }
+            if (localVideoSource == null) {
                 localVideoSource = factory.createVideoSource(false)
+            }
 
+            if (videoCapturer == null) {
                 videoCapturer = createCameraCapturer(isFrontCamera)
                 videoCapturer?.let { capturer ->
                     capturer.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
                     capturer.startCapture(1280, 720, 30)
                 }
-
-                localVideoTrack = factory.createVideoTrack("CCTV_VIDEO_TRACK", localVideoSource)
-                localVideoTrack?.setEnabled(true)
-                peerConnection?.addTrack(localVideoTrack, listOf("cctv_stream"))
             }
 
-            if (localAudioTrack == null) {
+            if (localVideoTrack == null) {
+                localVideoTrack = factory.createVideoTrack("CCTV_VIDEO_TRACK", localVideoSource)
+                localVideoTrack?.setEnabled(true)
+            }
+
+            if (localAudioSource == null) {
                 val audioConstraints = MediaConstraints().apply {
                     mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
                     mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation2", "true"))
@@ -443,12 +480,68 @@ class WebRtcSessionManager(
                     mandatory.add(MediaConstraints.KeyValuePair("googTypingNoiseDetection", "true"))
                 }
                 localAudioSource = factory.createAudioSource(audioConstraints)
+            }
+
+            if (localAudioTrack == null) {
                 localAudioTrack = factory.createAudioTrack("CCTV_AUDIO_TRACK", localAudioSource)
                 localAudioTrack?.setEnabled(true)
-                peerConnection?.addTrack(localAudioTrack, listOf("cctv_stream"))
             }
+
+            isCameraHardwareActive = true
+            Log.d(TAG, "Camera hardware and microphone opened successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Error setting up camera media tracks", e)
+            Log.e(TAG, "Error starting camera hardware", e)
+        }
+    }
+
+    @Synchronized
+    fun stopCameraHardware() {
+        if (!isCameraMode) return
+        Log.d(TAG, "Stopping camera hardware & mic. Returning to silent standby...")
+        isCameraHardwareActive = false
+
+        try {
+            try {
+                videoCapturer?.stopCapture()
+                videoCapturer?.dispose()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error stopping video capturer: ${e.message}")
+            }
+            videoCapturer = null
+
+            try {
+                surfaceTextureHelper?.dispose()
+            } catch (_: Exception) {}
+            surfaceTextureHelper = null
+
+            try {
+                localVideoTrack?.setEnabled(false)
+                localVideoTrack?.dispose()
+            } catch (_: Exception) {}
+            localVideoTrack = null
+
+            try {
+                localVideoSource?.dispose()
+            } catch (_: Exception) {}
+            localVideoSource = null
+
+            try {
+                localAudioTrack?.setEnabled(false)
+                localAudioTrack?.dispose()
+            } catch (_: Exception) {}
+            localAudioTrack = null
+
+            try {
+                localAudioSource?.dispose()
+            } catch (_: Exception) {}
+            localAudioSource = null
+
+            _connectionState.value = WebRtcConnectionState.WAITING_PEER
+            _statusText.value = "Standby: Waiting for Viewer to connect..."
+            onViewerDisconnected?.invoke()
+            Log.d(TAG, "Camera hardware completely released (Standby Mode)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing camera hardware", e)
         }
     }
 
@@ -621,6 +714,9 @@ class WebRtcSessionManager(
                 pendingIceCandidates.clear()
                 localIceCandidates.clear()
 
+                // Start physical camera and mic on-demand when viewer connects
+                startCameraHardware(currentIsFrontCamera)
+
                 try {
                     dataChannel?.close()
                     dataChannel?.dispose()
@@ -635,7 +731,7 @@ class WebRtcSessionManager(
 
                 setupPeerConnection(scope)
 
-                // Re-add existing live video and audio tracks
+                // Re-add live video and audio tracks
                 localVideoTrack?.let {
                     peerConnection?.addTrack(it, listOf("cctv_stream"))
                 }
@@ -644,6 +740,7 @@ class WebRtcSessionManager(
                 }
 
                 createAndSendOffer(roomId)
+                onViewerConnected?.invoke()
             } catch (e: Exception) {
                 Log.e(TAG, "Error resetting peer connection for new viewer", e)
             }
@@ -653,10 +750,16 @@ class WebRtcSessionManager(
     private fun handleSignalingMessage(scope: CoroutineScope, msg: SignalingMessage) {
         Log.d(TAG, "Signaling message received: ${msg.type} from ${msg.senderId}")
         when (msg.type) {
-            "ROOM_JOINED" -> {
+            "ROOM_JOINED", "START_STREAM", "VIEWER_CONNECT" -> {
                 if (isCameraMode) {
-                    Log.d(TAG, "Viewer joined room, resetting peer connection for fresh offer")
+                    Log.d(TAG, "Viewer joined room, activating camera & sending fresh offer")
                     resetPeerConnectionForFreshOffer(scope, msg.targetRoom.ifBlank { currentRoomId })
+                }
+            }
+            "ROOM_LEFT", "LEAVE", "VIEWER_DISCONNECT", "STOP_STREAM" -> {
+                if (isCameraMode) {
+                    Log.d(TAG, "Viewer left room, releasing camera hardware and entering standby")
+                    stopCameraHardware()
                 }
             }
             "OFFER" -> {
@@ -721,6 +824,10 @@ class WebRtcSessionManager(
             }
             "COMMAND" -> {
                 msg.command?.let { cmd ->
+                    if (isCameraMode && (cmd == "VIEWER_DISCONNECT" || cmd == "STOP_STREAM")) {
+                        Log.d(TAG, "Received VIEWER_DISCONNECT command, stopping camera hardware")
+                        stopCameraHardware()
+                    }
                     onCommandReceived?.invoke(cmd)
                 }
             }
