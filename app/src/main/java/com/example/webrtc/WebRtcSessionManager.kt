@@ -338,7 +338,7 @@ class WebRtcSessionManager(
                     Log.d(TAG, "onTrack: Received remote AudioTrack")
                     try {
                         track.setEnabled(true)
-                        track.setVolume(1.0)
+                        track.setVolume(10.0)
                     } catch (e: Exception) {
                         Log.w(TAG, "Error setting volume on remote audio track: ${e.message}")
                     }
@@ -590,39 +590,8 @@ class WebRtcSessionManager(
         when (msg.type) {
             "ROOM_JOINED" -> {
                 if (isCameraMode) {
-                    if (_connectionState.value == WebRtcConnectionState.CONNECTED) {
-                        Log.d(TAG, "Already connected, ignoring ROOM_JOINED")
-                        return
-                    }
-                    val localDesc = peerConnection?.localDescription
-                    if (localDesc != null && localDesc.type == SessionDescription.Type.OFFER) {
-                        Log.d(TAG, "Syncing existing OFFER to Viewer")
-                        val offerMsg = SignalingMessage(
-                            type = "OFFER",
-                            senderId = "CAMERA",
-                            targetRoom = msg.targetRoom.ifBlank { currentRoomId },
-                            sdp = localDesc.description,
-                            sdpType = localDesc.type.canonicalForm()
-                        )
-                        signalingClient?.sendMessage(offerMsg)
-
-                        synchronized(localIceCandidates) {
-                            for (cand in localIceCandidates) {
-                                signalingClient?.sendMessage(
-                                    SignalingMessage(
-                                        type = "ICE_CANDIDATE",
-                                        senderId = "CAMERA",
-                                        targetRoom = msg.targetRoom.ifBlank { currentRoomId },
-                                        sdpMid = cand.sdpMid,
-                                        sdpMLineIndex = cand.sdpMLineIndex,
-                                        candidate = cand.sdp
-                                    )
-                                )
-                            }
-                        }
-                    } else if (!isCreatingOffer) {
-                        createAndSendOffer(msg.targetRoom.ifBlank { currentRoomId })
-                    }
+                    Log.d(TAG, "Viewer joined room, resetting peer connection for fresh offer")
+                    resetPeerConnectionForFreshOffer(scope, msg.targetRoom.ifBlank { currentRoomId })
                 }
             }
             "OFFER" -> {
