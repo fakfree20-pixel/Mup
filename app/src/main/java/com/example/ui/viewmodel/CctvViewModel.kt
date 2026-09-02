@@ -2,6 +2,7 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.camera.view.PreviewView
@@ -32,14 +33,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.Random
+
 
 class CctvViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
@@ -50,6 +54,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         var httpServerInstance: com.example.network.CctvHttpServer? = null
         var batteryMonitorInstance: com.example.camera.BatteryMonitor? = null
         var backgroundLifecycleOwnerInstance: AlwaysActiveLifecycleOwner? = null
+        var cachedMediaProjectionData: Intent? = null
         val backgroundScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
     }
 
@@ -127,6 +132,15 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         return pin
     }
 
+    private fun getOrCreateSecurityPin(): String {
+        var pin = prefs.getString(com.example.receiver.BootReceiver.KEY_SECURITY_LOCK_PIN, null)
+        if (pin.isNullOrBlank()) {
+            pin = getOrCreateRoomPin()
+            prefs.edit().putString(com.example.receiver.BootReceiver.KEY_SECURITY_LOCK_PIN, pin).apply()
+        }
+        return pin
+    }
+
     private fun getOrCreateCameraId(): String {
         var id = prefs.getString(com.example.receiver.BootReceiver.KEY_CAM_ID, null)
         if (id.isNullOrBlank()) {
@@ -142,6 +156,15 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _cameraRoomPin = MutableStateFlow(getOrCreateRoomPin())
     val cameraRoomPin: StateFlow<String> = _cameraRoomPin
+
+    private val _cameraSecurityPin = MutableStateFlow(getOrCreateSecurityPin())
+    val cameraSecurityPin: StateFlow<String> = _cameraSecurityPin
+
+    private val _isCameraScreenLocked = MutableStateFlow(prefs.getBoolean(com.example.receiver.BootReceiver.KEY_SCREEN_LOCKED, false))
+    val isCameraScreenLocked: StateFlow<Boolean> = _isCameraScreenLocked
+
+    private val _isVoiceFilterEnabled = MutableStateFlow(prefs.getBoolean(com.example.receiver.BootReceiver.KEY_VOICE_FILTER_ENABLED, true))
+    val isVoiceFilterEnabled: StateFlow<Boolean> = _isVoiceFilterEnabled
 
     private val _cameraIp = MutableStateFlow("127.0.0.1")
     val cameraIp: StateFlow<String> = _cameraIp
@@ -176,6 +199,9 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     val cctvClient = CctvClient()
     var viewerWebRtcSession: WebRtcSessionManager? = null
         private set
+
+    private val _remoteTelemetry = MutableStateFlow(CameraTelemetry())
+    val remoteTelemetry: StateFlow<CameraTelemetry> = _remoteTelemetry
 
     private val _viewerModeTab = MutableStateFlow("WEBRTC") // "WEBRTC" (Mobile Data) or "LAN" (Local Wi-Fi)
     val viewerModeTab: StateFlow<String> = _viewerModeTab
@@ -217,8 +243,88 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 batteryLevel = level,
                 isCharging = isCharging
             )
+            broadcastCurrentTelemetry()
+        }
+        val (initialLevel, initialCharging) = batteryMonitor?.getCurrentBattery() ?: Pair(100, false)
+        _cameraTelemetry.value = _cameraTelemetry.value.copy(
+            batteryLevel = initialLevel,
+            isCharging = initialCharging
+        )
+
+        viewModelScope.launch {
+            cctvClient.telemetry.collect { t ->
+                if (!_isViewerWebRtcActive.value && t.cameraId.isNotBlank()) {
+                    _remoteTelemetry.value = t
+                }
+            }
         }
     }
+
+    fun broadcastCurrentTelemetry() {
+        val (curLevel, curCharging) = batteryMonitor?.getCurrentBattery() ?: Pair(_cameraTelemetry.value.batteryLevel, _cameraTelemetry.value.isCharging)
+        _cameraTelemetry.value = _cameraTelemetry.value.copy(
+            batteryLevel = curLevel,
+            isCharging = curCharging
+        )
+        val telemetry = _cameraTelemetry.value.copy(
+            cameraId = _cameraId.value,
+            ipAddress = _cameraIp.value,
+            port = _cameraPort.value,
+            lens = cameraManager.currentLens,
+            isTorchOn = cameraManager.isTorchOn,
+            isMicEnabled = true,
+            isSirenPlaying = audioStreamManager.isSirenActive(),
+            connectedClients = _connectedViewersCount.value
+        )
+        try {
+            val json = JSONObject().apply {
+                put("batteryLevel", telemetry.batteryLevel)
+                put("isCharging", telemetry.isCharging)
+                put("fps", 30)
+                put("lens", telemetry.lens.name)
+                put("isTorchOn", telemetry.isTorchOn)
+                put("isMicEnabled", telemetry.isMicEnabled)
+                put("isSirenPlaying", telemetry.isSirenPlaying)
+                put("isVoiceFilter", _isVoiceFilterEnabled.value)
+                put("isLocked", _isCameraScreenLocked.value)
+                put("cameraId", _cameraId.value)
+                put("timestamp", System.currentTimeMillis())
+            }
+            cameraWebRtcSession?.sendCommand("TELEMETRY:$json")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to broadcast telemetry: ${e.message}")
+        }
+    }
+
+    fun handleViewerIncomingMessage(cmd: String) {
+        if (cmd.startsWith("TELEMETRY:")) {
+            try {
+                val jsonStr = cmd.substringAfter("TELEMETRY:").trim()
+                val json = JSONObject(jsonStr)
+                val newTelemetry = CameraTelemetry(
+                    cameraId = json.optString("cameraId", ""),
+                    batteryLevel = json.optInt("batteryLevel", 100),
+                    isCharging = json.optBoolean("isCharging", false),
+                    fps = json.optInt("fps", 30),
+                    lens = if (json.optString("lens") == "FRONT") CameraLens.FRONT else CameraLens.BACK,
+                    isTorchOn = json.optBoolean("isTorchOn", false),
+                    isMicEnabled = json.optBoolean("isMicEnabled", true),
+                    isSirenPlaying = json.optBoolean("isSirenPlaying", false),
+                    timestamp = json.optLong("timestamp", System.currentTimeMillis())
+                )
+                _remoteTelemetry.value = newTelemetry
+                if (json.has("isVoiceFilter")) {
+                    _isVoiceFilterEnabled.value = json.optBoolean("isVoiceFilter", true)
+                }
+                if (json.has("isLocked")) {
+                    _isCameraScreenLocked.value = json.optBoolean("isLocked", false)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to parse remote telemetry: ${e.message}")
+            }
+        }
+    }
+
 
     fun setLanguage(lang: AppLanguage) {
         _language.value = lang
@@ -302,18 +408,33 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 roomId = _cameraRoomPin.value,
                 isFrontCamera = (cameraManager.currentLens == CameraLens.FRONT)
             )
+            cachedMediaProjectionData?.let { data ->
+                startScreenCapture(data)
+            }
         }
 
         backgroundScope.launch {
             cameraWebRtcSession?.connectionState?.collect { state ->
                 if (state == WebRtcConnectionState.CONNECTED) {
                     _connectedViewersCount.value = 1
+                    broadcastCurrentTelemetry()
                     if (_isAutoBlackoutEnabled.value) {
                         _isPowerSaverActive.value = true
                     }
                 }
             }
         }
+
+        // Periodic telemetry broadcast loop (2.5 seconds)
+        backgroundScope.launch {
+            while (isActive) {
+                if (_isCameraStreaming.value) {
+                    broadcastCurrentTelemetry()
+                }
+                delay(2500)
+            }
+        }
+
 
         // 5. Start HTTP & MJPEG Server (Local LAN fallback)
         httpServer = CctvHttpServer(
@@ -376,15 +497,59 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         lifecycleOwner: LifecycleOwner,
         previewView: PreviewView?
     ): String {
-        return when (action) {
-            "SWITCH_CAMERA" -> {
+        val result = when {
+            action.startsWith("SET_SECURITY_PIN:") -> {
+
+                val pin = action.substringAfter("SET_SECURITY_PIN:").trim()
+                if (pin.isNotBlank()) {
+                    _cameraSecurityPin.value = pin
+                    _isCameraScreenLocked.value = true
+                    prefs.edit()
+                        .putString(com.example.receiver.BootReceiver.KEY_SECURITY_LOCK_PIN, pin)
+                        .putBoolean(com.example.receiver.BootReceiver.KEY_SCREEN_LOCKED, true)
+                        .apply()
+                    "Security PIN set to $pin and screen locked"
+                } else {
+                    "Invalid PIN"
+                }
+            }
+            action.startsWith("LOCK_CAMERA_SCREEN") -> {
+                val pin = action.substringAfter("LOCK_CAMERA_SCREEN:", "").trim()
+                if (pin.isNotBlank()) {
+                    _cameraSecurityPin.value = pin
+                    prefs.edit().putString(com.example.receiver.BootReceiver.KEY_SECURITY_LOCK_PIN, pin).apply()
+                }
+                _isCameraScreenLocked.value = true
+                prefs.edit().putBoolean(com.example.receiver.BootReceiver.KEY_SCREEN_LOCKED, true).apply()
+                "Camera screen locked"
+            }
+            action == "UNLOCK_CAMERA_SCREEN" -> {
+                _isCameraScreenLocked.value = false
+                prefs.edit().putBoolean(com.example.receiver.BootReceiver.KEY_SCREEN_LOCKED, false).apply()
+                "Camera screen unlocked"
+            }
+            action.startsWith("SET_VOICE_FILTER:") -> {
+                val enabled = action.substringAfter("SET_VOICE_FILTER:").trim() == "1"
+                _isVoiceFilterEnabled.value = enabled
+                audioStreamManager.setVoiceFilterEnabled(enabled)
+                prefs.edit().putBoolean(com.example.receiver.BootReceiver.KEY_VOICE_FILTER_ENABLED, enabled).apply()
+                "Voice filter set to $enabled"
+            }
+            action == "TOGGLE_VOICE_FILTER" -> {
+                val newState = !_isVoiceFilterEnabled.value
+                _isVoiceFilterEnabled.value = newState
+                audioStreamManager.setVoiceFilterEnabled(newState)
+                prefs.edit().putBoolean(com.example.receiver.BootReceiver.KEY_VOICE_FILTER_ENABLED, newState).apply()
+                "Voice filter toggled to $newState"
+            }
+            action == "SWITCH_CAMERA" -> {
                 backgroundScope.launch(Dispatchers.Main) {
                     cameraManager.switchCamera(lifecycleOwner, previewView)
                     cameraWebRtcSession?.switchCamera(cameraManager.currentLens == CameraLens.FRONT)
                 }
                 "Switched to ${cameraManager.currentLens}"
             }
-                        "TOGGLE_TORCH" -> {
+            action == "TOGGLE_TORCH" -> {
                 try {
                     val camManager = getApplication<Application>().getSystemService(android.content.Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
                     val camId = camManager.cameraIdList[0] // Assume back camera is 0
@@ -399,46 +564,57 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                     "Torch set to $state"
                 }
             }
-            "TOGGLE_MIC" -> {
+            action == "TOGGLE_MIC" -> {
                 "Mic toggled"
             }
-            "TRIGGER_SIREN" -> {
+            action == "TRIGGER_SIREN" -> {
                 audioStreamManager.startSiren(backgroundScope)
                 "Siren started"
             }
-            "STOP_SIREN" -> {
+            action == "STOP_SIREN" -> {
                 audioStreamManager.stopSiren()
                 "Siren stopped"
             }
-            "TAKE_SNAPSHOT" -> {
+            action == "TAKE_SNAPSHOT" -> {
                 backgroundScope.launch {
                     takeCameraLocalSnapshot()
                 }
                 "Snapshot taken"
             }
-            "TOGGLE_BLACKOUT" -> {
+            action == "GET_TELEMETRY" -> {
+                broadcastCurrentTelemetry()
+                "Telemetry broadcasted"
+            }
+            action == "TOGGLE_BLACKOUT" -> {
                 _isPowerSaverActive.value = !_isPowerSaverActive.value
+                broadcastCurrentTelemetry()
                 "Screen blackout set to ${_isPowerSaverActive.value}"
             }
-            "ENABLE_BLACKOUT" -> {
+            action == "ENABLE_BLACKOUT" -> {
                 _isPowerSaverActive.value = true
+                broadcastCurrentTelemetry()
                 "Screen blackout enabled"
             }
-            "DISABLE_BLACKOUT" -> {
+            action == "DISABLE_BLACKOUT" -> {
                 _isPowerSaverActive.value = false
+                broadcastCurrentTelemetry()
                 "Screen blackout disabled"
             }
-            "PAUSE_VIDEO" -> {
+            action == "PAUSE_VIDEO" -> {
                 cameraWebRtcSession?.enableLocalVideo(false)
                 "Video paused"
             }
-            "RESUME_VIDEO" -> {
+            action == "RESUME_VIDEO" -> {
                 cameraWebRtcSession?.enableLocalVideo(true)
                 "Video resumed"
             }
-            else -> "Unknown command"
+            else -> "Unknown command: $action"
         }
+        // Broadcast state update immediately
+        broadcastCurrentTelemetry()
+        return result
     }
+
 
     fun toggleAutoBlackout() {
         _isAutoBlackoutEnabled.value = !_isAutoBlackoutEnabled.value
@@ -515,6 +691,17 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         _connectedViewersCount.value = 0
     }
 
+    fun startScreenCapture(context: Context, mediaProjectionData: Intent) {
+        cachedMediaProjectionData = mediaProjectionData
+        cameraWebRtcSession?.startScreenCapture(mediaProjectionData)
+        showToast(if (_language.value == AppLanguage.HINDI) "स्क्रीन शेयरिंग ऑटो-सेव हो गई (अब दोबारा परमिशन नहीं मांगनी पड़ेगी)" else "Screen Mirroring permissions auto-saved")
+    }
+
+    private fun startScreenCapture(mediaProjectionData: Intent) {
+        cachedMediaProjectionData = mediaProjectionData
+        cameraWebRtcSession?.startScreenCapture(mediaProjectionData)
+    }
+
     // --- VIEWER MODE CONTROLS ---
 
     // 1. Connect via WebRTC over Mobile Data (4G/5G) using 6-Digit Room PIN
@@ -534,6 +721,9 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             context = getApplication(),
             isCameraMode = false
         ).apply {
+            onCommandReceived = { cmd ->
+                handleViewerIncomingMessage(cmd)
+            }
             startSession(
                 scope = backgroundScope,
                 roomId = cleanPin
@@ -551,6 +741,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 when (state) {
                     WebRtcConnectionState.CONNECTED -> {
                         showToast("✅ Live CCTV Connected!")
+                        viewerWebRtcSession?.sendCommand("GET_TELEMETRY")
                     }
                     WebRtcConnectionState.CONNECTING_P2P -> {
                         _webRtcStatus.value = "Connecting live stream..."
@@ -562,6 +753,17 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+
+        // Viewer telemetry poll loop
+        viewModelScope.launch {
+            while (isActive && _isViewerWebRtcActive.value) {
+                if (viewerWebRtcSession?.connectionState?.value == WebRtcConnectionState.CONNECTED) {
+                    viewerWebRtcSession?.sendCommand("GET_TELEMETRY")
+                }
+                delay(3000)
+            }
+        }
+
 
         viewModelScope.launch {
             dao.insertOrUpdateCamera(
@@ -784,6 +986,71 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteSavedCamera(camera: SavedCamera) {
         viewModelScope.launch(Dispatchers.IO) {
             dao.deleteCamera(camera)
+        }
+    }
+
+    fun toggleVoiceFilter() {
+        val newState = !_isVoiceFilterEnabled.value
+        _isVoiceFilterEnabled.value = newState
+        prefs.edit().putBoolean(com.example.receiver.BootReceiver.KEY_VOICE_FILTER_ENABLED, newState).apply()
+        audioStreamManager.setVoiceFilterEnabled(newState)
+        sendRemoteCommand("SET_VOICE_FILTER:${if (newState) "1" else "0"}")
+        showToast(
+            if (newState) {
+                if (_language.value == AppLanguage.HINDI) "🎙️ गाड़ी और बाइक का शोर बंद (Voice Isolation ON)" else "🎙️ Traffic Noise Filter ON (Clear Voice)"
+            } else {
+                if (_language.value == AppLanguage.HINDI) "🎙️ नॉइज़ फ़िल्टर बंद (Raw Audio)" else "🎙️ Noise Filter OFF"
+            }
+        )
+    }
+
+    fun setRemoteSecurityPin(pin: String) {
+        val cleanPin = pin.trim()
+        if (cleanPin.length >= 4) {
+            sendRemoteCommand("SET_SECURITY_PIN:$cleanPin")
+            showToast(
+                if (_language.value == AppLanguage.HINDI)
+                    "🔒 पुराने फोन में सुरक्षा कोड $cleanPin सेट हो गया और फोन लॉक हो गया!"
+                else
+                    "🔒 Security PIN $cleanPin set on Camera & Screen Locked!"
+            )
+        } else {
+            showToast(
+                if (_language.value == AppLanguage.HINDI) "कम से कम 4-अंकों का कोड डालें" else "Enter at least 4-digit PIN"
+            )
+        }
+    }
+
+    fun lockCameraScreenRemotely(pin: String? = null) {
+        val cmd = if (!pin.isNullOrBlank()) "LOCK_CAMERA_SCREEN:${pin.trim()}" else "LOCK_CAMERA_SCREEN"
+        sendRemoteCommand(cmd)
+        showToast(
+            if (_language.value == AppLanguage.HINDI) "🔒 पुराना फोन स्क्रीन तुरंत लॉक कर दिया गया!" else "🔒 Old Phone Screen Locked Remotely!"
+        )
+    }
+
+    fun unlockCameraScreenRemotely() {
+        sendRemoteCommand("UNLOCK_CAMERA_SCREEN")
+        showToast(
+            if (_language.value == AppLanguage.HINDI) "🔓 पुराना फोन स्क्रीन अनलॉक कर दिया गया!" else "🔓 Old Phone Screen Unlocked Remotely!"
+        )
+    }
+
+    fun lockCameraScreenLocally() {
+        _isCameraScreenLocked.value = true
+        prefs.edit().putBoolean(com.example.receiver.BootReceiver.KEY_SCREEN_LOCKED, true).apply()
+    }
+
+    fun unlockCameraScreenLocally(enteredPin: String): Boolean {
+        val clean = enteredPin.trim()
+        val secPin = _cameraSecurityPin.value.trim()
+        val roomPin = _cameraRoomPin.value.trim()
+        return if (clean == secPin || clean == roomPin) {
+            _isCameraScreenLocked.value = false
+            prefs.edit().putBoolean(com.example.receiver.BootReceiver.KEY_SCREEN_LOCKED, false).apply()
+            true
+        } else {
+            false
         }
     }
 

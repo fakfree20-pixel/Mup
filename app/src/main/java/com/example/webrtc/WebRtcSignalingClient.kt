@@ -84,6 +84,22 @@ class WebRtcSignalingClient(
         onStateChanged?.invoke("Connecting to Global Relay...")
 
         job = scope.launch(Dispatchers.IO) {
+            // Immediate initial fetch to catch messages instantly without waiting
+            try {
+                val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=now"
+                val request = Request.Builder().url(pollUrl).build()
+                postClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val body = response.body?.string()
+                        if (!body.isNullOrEmpty()) {
+                            for (l in body.split("\n")) {
+                                handleIncomingStreamLine(l)
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
             // 1. Start HTTPS Event Stream (Bypasses all Saudi/India cellular blocks)
             launch { startHttpsStream() }
             

@@ -34,6 +34,10 @@ class AudioStreamManager(private val context: Context) {
     private var isSirenRunning = false
     private var sirenJob: Job? = null
 
+    // Voice Isolation & Vehicle Noise Elimination DSP
+    private val voiceDsp = VoiceIsolationDsp(SAMPLE_RATE)
+    var isVoiceFilterActive = true
+
     // Listeners for outgoing microphone packets
     private val audioListeners = CopyOnWriteArrayList<(ByteArray) -> Unit>()
 
@@ -75,6 +79,9 @@ class AudioStreamManager(private val context: Context) {
                     val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
                     if (read > 0) {
                         val packet = buffer.copyOf(read)
+                        if (isVoiceFilterActive) {
+                            voiceDsp.processPcm16(packet)
+                        }
                         for (listener in audioListeners) {
                             try {
                                 listener(packet)
@@ -225,4 +232,11 @@ class AudioStreamManager(private val context: Context) {
     }
 
     fun isSirenActive(): Boolean = isSirenRunning
+
+    fun setVoiceFilterEnabled(enabled: Boolean) {
+        isVoiceFilterActive = enabled
+        if (!enabled) {
+            voiceDsp.reset()
+        }
+    }
 }

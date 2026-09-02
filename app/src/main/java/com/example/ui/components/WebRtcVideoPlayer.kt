@@ -91,21 +91,15 @@ fun WebRtcVideoPlayer(
         contentAlignment = Alignment.Center
     ) {
         AndroidView(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer(
-                    scaleX = scale,
-                    scaleY = scale,
-                    translationX = offsetX,
-                    translationY = offsetY
-                ),
+            modifier = Modifier.fillMaxSize(),
             factory = { context ->
                 SurfaceViewRenderer(context).apply {
                     try {
                         init(eglBase.eglBaseContext, null)
                         setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
                         setMirror(isMirror)
-                        setEnableHardwareScaler(true)
+                        setEnableHardwareScaler(false)
+                        setZOrderMediaOverlay(false)
                     } catch (e: Exception) {
                         Log.e("WebRtcVideoPlayer", "Init error: ${e.message}")
                     }

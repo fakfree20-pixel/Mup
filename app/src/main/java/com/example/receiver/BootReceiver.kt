@@ -13,6 +13,9 @@ class BootReceiver : BroadcastReceiver() {
         const val KEY_CAMERA_MODE_ACTIVE = "camera_mode_active"
         const val KEY_ROOM_PIN = "saved_room_pin"
         const val KEY_CAM_ID = "saved_cam_id"
+        const val KEY_SECURITY_LOCK_PIN = "security_lock_pin"
+        const val KEY_SCREEN_LOCKED = "is_screen_locked"
+        const val KEY_VOICE_FILTER_ENABLED = "voice_filter_enabled"
     }
 
     override fun onReceive(context: Context, intent: Intent?) {

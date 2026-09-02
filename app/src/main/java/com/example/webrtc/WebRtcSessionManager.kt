@@ -132,6 +132,14 @@ class WebRtcSessionManager(
                 am.mode = AudioManager.MODE_IN_COMMUNICATION
                 am.isSpeakerphoneOn = true
                 am.setSpeakerphoneOn(true)
+                try {
+                    val maxVoice = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
+                    am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, maxVoice, 0)
+                } catch (_: Exception) {}
+                try {
+                    val maxMusic = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                    am.setStreamVolume(AudioManager.STREAM_MUSIC, maxMusic, 0)
+                } catch (_: Exception) {}
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to configure AudioManager: ${e.message}")
@@ -146,14 +154,17 @@ class WebRtcSessionManager(
 
         val encoderFactory = DefaultVideoEncoderFactory(
             rootEglBase.eglBaseContext,
-            true, // enableIntelVp8Encoder
-            true  // enableH264HighProfile
+            false, // enableIntelVp8Encoder
+            false  // enableH264HighProfile
         )
         val decoderFactory = DefaultVideoDecoderFactory(rootEglBase.eglBaseContext)
 
+        val isAecSupported = JavaAudioDeviceModule.isBuiltInAcousticEchoCancelerSupported()
+        val isNsSupported = JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported()
+
         audioDeviceModule = JavaAudioDeviceModule.builder(context)
-            .setUseHardwareAcousticEchoCanceler(true)
-            .setUseHardwareNoiseSuppressor(true)
+            .setUseHardwareAcousticEchoCanceler(isAecSupported)
+            .setUseHardwareNoiseSuppressor(isNsSupported)
             .createAudioDeviceModule()
 
         peerConnectionFactory = PeerConnectionFactory.builder()
@@ -218,7 +229,7 @@ class WebRtcSessionManager(
         scope.launch(Dispatchers.IO) {
             var retryCount = 0
             while (scope.isActive) {
-                delay(4000)
+                delay(1500)
                 val state = _connectionState.value
                 if (state == WebRtcConnectionState.WAITING_PEER || state == WebRtcConnectionState.FAILED) {
                     retryCount++
@@ -389,7 +400,11 @@ class WebRtcSessionManager(
         val factory = peerConnectionFactory ?: return
         val audioConstraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation2", "true"))
             mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression2", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
         }
         localAudioSource = factory.createAudioSource(audioConstraints)
         localAudioTrack = factory.createAudioTrack("VIEWER_TALK_TRACK", localAudioSource)
@@ -419,8 +434,13 @@ class WebRtcSessionManager(
             if (localAudioTrack == null) {
                 val audioConstraints = MediaConstraints().apply {
                     mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation2", "true"))
                     mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "false"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl2", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression2", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googTypingNoiseDetection", "true"))
                 }
                 localAudioSource = factory.createAudioSource(audioConstraints)
                 localAudioTrack = factory.createAudioTrack("CCTV_AUDIO_TRACK", localAudioSource)
@@ -429,6 +449,51 @@ class WebRtcSessionManager(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error setting up camera media tracks", e)
+        }
+    }
+
+    fun startScreenCapture(mediaProjectionData: android.content.Intent) {
+        val factory = peerConnectionFactory ?: return
+        try {
+            if (localVideoTrack == null) {
+                surfaceTextureHelper = SurfaceTextureHelper.create("WebRtcScreenCaptureThread", rootEglBase.eglBaseContext)
+                localVideoSource = factory.createVideoSource(true)
+
+                videoCapturer = ScreenCapturerAndroid(mediaProjectionData, object : android.media.projection.MediaProjection.Callback() {
+                    override fun onStop() {
+                        super.onStop()
+                        Log.d(TAG, "MediaProjection onStop")
+                    }
+                })
+
+                videoCapturer?.let { capturer ->
+                    capturer.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
+                    capturer.startCapture(1280, 720, 30)
+                }
+
+                localVideoTrack = factory.createVideoTrack("CCTV_SCREEN_TRACK", localVideoSource)
+                localVideoTrack?.setEnabled(true)
+                peerConnection?.addTrack(localVideoTrack, listOf("cctv_stream"))
+            }
+
+            if (localAudioTrack == null) {
+                val audioConstraints = MediaConstraints().apply {
+                    mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation2", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl2", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression2", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googTypingNoiseDetection", "true"))
+                }
+                localAudioSource = factory.createAudioSource(audioConstraints)
+                localAudioTrack = factory.createAudioTrack("CCTV_AUDIO_TRACK", localAudioSource)
+                localAudioTrack?.setEnabled(true)
+                peerConnection?.addTrack(localAudioTrack, listOf("cctv_stream"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting screen capture", e)
         }
     }
 

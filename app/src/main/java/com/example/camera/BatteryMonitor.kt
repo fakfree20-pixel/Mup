@@ -6,7 +6,10 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 
-class BatteryMonitor(private val context: Context, private val onBatteryUpdate: (level: Int, isCharging: Boolean) -> Unit) {
+class BatteryMonitor(
+    private val context: Context,
+    private val onBatteryUpdate: (level: Int, isCharging: Boolean) -> Unit
+) {
     private var isRegistered = false
 
     private val receiver = object : BroadcastReceiver() {
@@ -33,6 +36,26 @@ class BatteryMonitor(private val context: Context, private val onBatteryUpdate: 
         }
     }
 
+    fun getCurrentBattery(): Pair<Int, Boolean> {
+        return try {
+            val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+            val stickyIntent = context.registerReceiver(null, filter)
+            if (stickyIntent != null) {
+                val level = stickyIntent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                val scale = stickyIntent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+                val status = stickyIntent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                val pct = if (level >= 0 && scale > 0) (level * 100 / scale) else 100
+                val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                        status == BatteryManager.BATTERY_STATUS_FULL
+                Pair(pct, isCharging)
+            } else {
+                Pair(100, false)
+            }
+        } catch (_: Exception) {
+            Pair(100, false)
+        }
+    }
+
     private fun updateBattery(intent: Intent) {
         val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
         val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
@@ -50,3 +73,4 @@ class BatteryMonitor(private val context: Context, private val onBatteryUpdate: 
         onBatteryUpdate(batteryPct, isCharging)
     }
 }
+

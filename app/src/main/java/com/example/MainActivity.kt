@@ -1,12 +1,15 @@
 package com.example
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
 import android.app.PictureInPictureParams
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
 import android.widget.Toast
+import com.example.ui.strings.AppLanguage
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -66,6 +69,16 @@ fun CctvApp(viewModel: CctvViewModel) {
     val scope = rememberCoroutineScope()
 
     // Permission launcher for Camera & Mic
+
+    val screenCaptureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            viewModel.startScreenCapture(context, result.data!!)
+        } else {
+            Toast.makeText(context, if (language == AppLanguage.HINDI) "स्क्रीन शेयरिंग अनुमति अस्वीकृत" else "Screen Mirroring permission denied", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val viewerPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -183,6 +196,10 @@ fun CctvApp(viewModel: CctvViewModel) {
                         onStopCamera = {
                             viewModel.stopCameraMode()
                             viewModel.selectRole(AppRole.SELECTION)
+                        },
+                        onStartScreenMirroring = {
+                            val mediaProjectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
+                            screenCaptureLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
                         }
                     )
                 }

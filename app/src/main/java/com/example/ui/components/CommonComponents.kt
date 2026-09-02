@@ -237,32 +237,100 @@ fun LiveRecBadge(modifier: Modifier = Modifier, isRecording: Boolean = false) {
 
 @Composable
 fun BatteryStatusChip(level: Int, isCharging: Boolean, modifier: Modifier = Modifier) {
+    val batteryColor = when {
+        isCharging -> Color(0xFF00E676)
+        level > 50 -> Color(0xFF4CAF50)
+        level > 20 -> Color(0xFFFFB300)
+        else -> CctvAlertRed
+    }
+
     Surface(
         shape = RoundedCornerShape(20.dp),
-        color = Color(0x99000000),
-        border = androidx.compose.foundation.BorderStroke(1.dp, CctvGlassBorder),
+        color = Color(0xCC000000),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (isCharging) Color(0xFF00E676).copy(alpha = 0.6f) else if (level <= 20) CctvAlertRed else CctvGlassBorder
+        ),
         modifier = modifier
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
         ) {
             Icon(
                 imageVector = if (isCharging) Icons.Default.BatteryChargingFull else Icons.Default.BatteryFull,
                 contentDescription = "Battery",
-                tint = if (level > 20) Color.White else CctvAlertRed,
-                modifier = Modifier.size(13.dp)
+                tint = batteryColor,
+                modifier = Modifier.size(14.dp)
             )
             Text(
-                text = "$level%",
+                text = if (isCharging) "$level% ⚡" else "$level%",
                 fontSize = 11.sp,
                 color = Color.White,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace
             )
         }
     }
 }
+
+@Composable
+fun CameraPhoneBatteryBadge(
+    level: Int,
+    isCharging: Boolean,
+    modifier: Modifier = Modifier,
+    showLabel: Boolean = true,
+    isHindi: Boolean = true
+) {
+    val batteryColor = when {
+        isCharging -> Color(0xFF00E676) // Bright Charging Green
+        level > 50 -> Color(0xFF4CAF50) // Healthy Green
+        level > 20 -> Color(0xFFFFB300) // Amber Warning
+        else -> Color(0xFFFF1744) // Red Alert
+    }
+
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = Color(0xDD0D1117),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (isCharging) Color(0xFF00E676).copy(alpha = 0.7f) else if (level <= 20) Color(0xFFFF1744) else Color(0x44FFFFFF)
+        ),
+        modifier = modifier
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            Icon(
+                imageVector = if (isCharging) Icons.Default.BatteryChargingFull else Icons.Default.BatteryFull,
+                contentDescription = "Battery",
+                tint = batteryColor,
+                modifier = Modifier.size(16.dp)
+            )
+
+            Text(
+                text = if (isCharging) "$level% ⚡" else "$level%",
+                fontSize = 12.sp,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace
+            )
+
+            if (showLabel) {
+                Text(
+                    text = if (isHindi) "• पुराना फोन" else "• Camera",
+                    fontSize = 11.sp,
+                    color = Color(0xFF94A3B8),
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+    }
+}
+
 
 @Composable
 fun MotionAlertBanner(
