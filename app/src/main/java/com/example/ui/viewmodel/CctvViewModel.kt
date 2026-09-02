@@ -539,10 +539,13 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             viewerWebRtcSession?.connectionState?.collect { state ->
                 when (state) {
                     WebRtcConnectionState.CONNECTED -> {
-                        showToast("✅ Connected via WebRTC P2P (Mobile Data)!")
+                        showToast("✅ Live CCTV Connected!")
+                    }
+                    WebRtcConnectionState.CONNECTING_P2P -> {
+                        _webRtcStatus.value = "Connecting live stream..."
                     }
                     WebRtcConnectionState.FAILED -> {
-                        showToast("WebRTC connection failed. Retrying...")
+                        _webRtcStatus.value = "Reconnecting..."
                     }
                     else -> {}
                 }

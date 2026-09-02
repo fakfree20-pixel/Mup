@@ -1,6 +1,7 @@
 package com.example.webrtc
 
 import android.content.Context
+import android.media.AudioManager
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -10,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.webrtc.*
+import org.webrtc.audio.JavaAudioDeviceModule
 import java.util.concurrent.Executors
 
 class WebRtcSessionManager(
@@ -25,6 +27,7 @@ class WebRtcSessionManager(
     private var peerConnectionFactory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
     private var dataChannel: DataChannel? = null
+    private var audioDeviceModule: JavaAudioDeviceModule? = null
 
     // Media Tracks
     private var videoCapturer: VideoCapturer? = null
@@ -34,7 +37,7 @@ class WebRtcSessionManager(
     private var localAudioSource: AudioSource? = null
     private var localAudioTrack: AudioTrack? = null
 
-    // Remote Tracks (for Viewer)
+    // Remote Tracks (for Viewer & Camera)
     private val _remoteVideoTrack = MutableStateFlow<VideoTrack?>(null)
     val remoteVideoTrack: StateFlow<VideoTrack?> = _remoteVideoTrack
 
@@ -119,6 +122,19 @@ class WebRtcSessionManager(
 
     init {
         initializePeerConnectionFactory()
+        configureAudioManager()
+    }
+
+    private fun configureAudioManager() {
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            audioManager?.let { am ->
+                am.mode = AudioManager.MODE_IN_COMMUNICATION
+                am.isSpeakerphoneOn = true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to configure AudioManager: ${e.message}")
+        }
     }
 
     private fun initializePeerConnectionFactory() {
@@ -134,7 +150,13 @@ class WebRtcSessionManager(
         )
         val decoderFactory = DefaultVideoDecoderFactory(rootEglBase.eglBaseContext)
 
+        audioDeviceModule = JavaAudioDeviceModule.builder(context)
+            .setUseHardwareAcousticEchoCanceler(true)
+            .setUseHardwareNoiseSuppressor(true)
+            .createAudioDeviceModule()
+
         peerConnectionFactory = PeerConnectionFactory.builder()
+            .setAudioDeviceModule(audioDeviceModule)
             .setVideoEncoderFactory(encoderFactory)
             .setVideoDecoderFactory(decoderFactory)
             .setOptions(PeerConnectionFactory.Options())
@@ -178,9 +200,9 @@ class WebRtcSessionManager(
             start(scope)
         }
 
-        // Send initial handshake
+        // Send initial handshake immediately
         scope.launch(Dispatchers.IO) {
-            delay(500)
+            delay(300)
             if (!isCameraMode) {
                 signalingClient?.sendMessage(
                     SignalingMessage(
@@ -192,16 +214,16 @@ class WebRtcSessionManager(
             }
         }
 
-        // Background watchdog: only retry handshake if completely IDLE/WAITING for >8 seconds
+        // Background watchdog: actively syncs handshake until fully CONNECTED
         scope.launch(Dispatchers.IO) {
             var retryCount = 0
             while (scope.isActive) {
-                delay(4000)
+                delay(2500)
                 val state = _connectionState.value
-                if (state == WebRtcConnectionState.WAITING_PEER || state == WebRtcConnectionState.FAILED) {
+                if (state != WebRtcConnectionState.CONNECTED) {
                     retryCount++
-                    if (!isCameraMode && retryCount % 2 == 0) {
-                        Log.d(TAG, "Watchdog: Sending ROOM_JOINED retry...")
+                    if (!isCameraMode) {
+                        Log.d(TAG, "Watchdog ($retryCount): Sending ROOM_JOINED sync...")
                         signalingClient?.sendMessage(
                             SignalingMessage(
                                 type = "ROOM_JOINED",
@@ -286,10 +308,20 @@ class WebRtcSessionManager(
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
 
             override fun onAddStream(stream: MediaStream) {
-                Log.d(TAG, "onAddStream with ${stream.videoTracks.size} video tracks")
+                Log.d(TAG, "onAddStream with ${stream.videoTracks.size} video, ${stream.audioTracks.size} audio")
                 if (stream.videoTracks.isNotEmpty()) {
                     val track = stream.videoTracks.first()
                     _remoteVideoTrack.value = track
+                }
+                if (stream.audioTracks.isNotEmpty()) {
+                    for (track in stream.audioTracks) {
+                        try {
+                            track.setEnabled(true)
+                            track.setVolume(1.0)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error enabling remote audio: ${e.message}")
+                        }
+                    }
                 }
             }
 
@@ -298,6 +330,14 @@ class WebRtcSessionManager(
                 if (track is VideoTrack) {
                     Log.d(TAG, "onTrack: Received remote VideoTrack")
                     _remoteVideoTrack.value = track
+                } else if (track is AudioTrack) {
+                    Log.d(TAG, "onTrack: Received remote AudioTrack")
+                    try {
+                        track.setEnabled(true)
+                        track.setVolume(1.0)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error setting volume on remote audio track: ${e.message}")
+                    }
                 }
             }
 
@@ -391,6 +431,7 @@ class WebRtcSessionManager(
     fun enableViewerTwoWayAudio(enable: Boolean) {
         if (isCameraMode) return
         localAudioTrack?.setEnabled(enable)
+        configureAudioManager()
     }
 
     private fun createCameraCapturer(isFront: Boolean): VideoCapturer? {
@@ -488,40 +529,51 @@ class WebRtcSessionManager(
         }, sdpConstraints)
     }
 
+    private fun resetPeerConnectionForFreshOffer(scope: CoroutineScope, roomId: String) {
+        executor.submit {
+            try {
+                Log.d(TAG, "Resetting PeerConnection for new/reconnecting viewer in room $roomId")
+                isCreatingOffer = false
+                isRemoteDescriptionSet = false
+                pendingIceCandidates.clear()
+                localIceCandidates.clear()
+
+                try {
+                    dataChannel?.close()
+                    dataChannel?.dispose()
+                    dataChannel = null
+                } catch (_: Exception) {}
+
+                try {
+                    peerConnection?.close()
+                    peerConnection?.dispose()
+                    peerConnection = null
+                } catch (_: Exception) {}
+
+                setupPeerConnection(scope)
+
+                // Re-add existing live video and audio tracks
+                localVideoTrack?.let {
+                    peerConnection?.addTrack(it, listOf("cctv_stream"))
+                }
+                localAudioTrack?.let {
+                    peerConnection?.addTrack(it, listOf("cctv_stream"))
+                }
+
+                createAndSendOffer(roomId)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error resetting peer connection for new viewer", e)
+            }
+        }
+    }
+
     private fun handleSignalingMessage(scope: CoroutineScope, msg: SignalingMessage) {
         Log.d(TAG, "Signaling message received: ${msg.type} from ${msg.senderId}")
         when (msg.type) {
             "ROOM_JOINED" -> {
                 if (isCameraMode) {
-                    val localDesc = peerConnection?.localDescription
-                    if (localDesc != null && localDesc.type == SessionDescription.Type.OFFER) {
-                        Log.d(TAG, "Syncing OFFER to Viewer")
-                        val offerMsg = SignalingMessage(
-                            type = "OFFER",
-                            senderId = "CAMERA",
-                            targetRoom = msg.targetRoom.ifBlank { currentRoomId },
-                            sdp = localDesc.description,
-                            sdpType = localDesc.type.canonicalForm()
-                        )
-                        signalingClient?.sendMessage(offerMsg)
-
-                        synchronized(localIceCandidates) {
-                            for (cand in localIceCandidates) {
-                                signalingClient?.sendMessage(
-                                    SignalingMessage(
-                                        type = "ICE_CANDIDATE",
-                                        senderId = "CAMERA",
-                                        targetRoom = msg.targetRoom.ifBlank { currentRoomId },
-                                        sdpMid = cand.sdpMid,
-                                        sdpMLineIndex = cand.sdpMLineIndex,
-                                        candidate = cand.sdp
-                                    )
-                                )
-                            }
-                        }
-                    } else if (!isCreatingOffer) {
-                        createAndSendOffer(msg.targetRoom)
-                    }
+                    Log.d(TAG, "ROOM_JOINED received from Viewer. Resetting PeerConnection for fresh handshake...")
+                    resetPeerConnectionForFreshOffer(scope, msg.targetRoom.ifBlank { currentRoomId })
                 }
             }
             "OFFER" -> {

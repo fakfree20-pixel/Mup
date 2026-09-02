@@ -237,10 +237,6 @@ class WebRtcSignalingClient(
             val timestamp = json.optLong("timestamp", System.currentTimeMillis())
 
             if (sender.equals(clientRole, ignoreCase = true)) return
-            if (timestamp < sessionStartTime - 8000L) {
-                // Ignore stale message from an older session
-                return
-            }
             if (id.isNotBlank() && isDuplicate(id)) return
 
             val msg = SignalingMessage(
@@ -258,7 +254,7 @@ class WebRtcSignalingClient(
             )
             onMessageReceived(msg)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse incoming message", e)
+            Log.e(TAG, "Failed to parse signaling message: $jsonStr", e)
         }
     }
 

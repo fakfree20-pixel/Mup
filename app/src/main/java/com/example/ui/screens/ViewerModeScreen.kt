@@ -1,5 +1,9 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,11 +21,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.ui.components.WebRtcVideoPlayer
 import com.example.ui.strings.AppLanguage
 import com.example.ui.theme.*
@@ -34,6 +40,7 @@ fun ViewerModeScreen(
     language: AppLanguage,
     onBackToSelection: () -> Unit
 ) {
+    val context = LocalContext.current
     val isConnected by viewModel.cctvClient.isConnected.collectAsState()
     val isConnecting by viewModel.cctvClient.isConnecting.collectAsState()
     val latestFrame by viewModel.cctvClient.latestFrame.collectAsState()
@@ -47,6 +54,14 @@ fun ViewerModeScreen(
     val isViewerMicOn by viewModel.isViewerMicTalking.collectAsState()
     val roomPinInput by viewModel.viewerRoomPinInput.collectAsState()
     val webRtcStatus by viewModel.webRtcStatus.collectAsState()
+
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            viewModel.toggleViewerMic()
+        }
+    }
     
     val isAnyConnected = isConnected || (isViewerWebRtcActive && webRtcConnState == WebRtcConnectionState.CONNECTED)
     val isAttemptingConnection = isConnecting || (isViewerWebRtcActive && (
@@ -154,7 +169,18 @@ fun ViewerModeScreen(
                 ) {
                     // Two Way Voice Talk (माइक से बोलें)
                     IconButton(
-                        onClick = { viewModel.toggleViewerMic() },
+                        onClick = {
+                            val hasPermission = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.RECORD_AUDIO
+                            ) == PackageManager.PERMISSION_GRANTED
+
+                            if (hasPermission) {
+                                viewModel.toggleViewerMic()
+                            } else {
+                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        },
                         modifier = Modifier
                             .size(54.dp)
                             .background(
