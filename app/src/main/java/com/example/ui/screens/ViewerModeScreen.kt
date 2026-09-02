@@ -54,6 +54,7 @@ fun ViewerModeScreen(
     val isViewerMicOn by viewModel.isViewerMicTalking.collectAsState()
     val roomPinInput by viewModel.viewerRoomPinInput.collectAsState()
     val webRtcStatus by viewModel.webRtcStatus.collectAsState()
+    val isAudioOnlyMode by viewModel.isAudioOnlyMode.collectAsState()
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -81,8 +82,59 @@ fun ViewerModeScreen(
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         if (isAnyConnected) {
-            // 1. FULL SCREEN LIVE VIDEO
-            if (isViewerWebRtcActive && webRtcSession != null) {
+            // 1. FULL SCREEN LIVE VIDEO or AUDIO ONLY
+            if (isAudioOnlyMode) {
+                Box(
+                    modifier = Modifier.fillMaxSize().background(Color(0xFF0F1117)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier.padding(24.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(110.dp)
+                                .background(Color(0x2210B981), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.VolumeUp,
+                                contentDescription = "Audio Only",
+                                tint = CctvSuccessGreen,
+                                modifier = Modifier.size(60.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Text(
+                            text = "🎧 ऑडियो-ओनली मोड (सिर्फ आवाज)",
+                            color = Color.White,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "पुराने फोन के सामने हो रही बात साफ सुनी जा रही है।\nवीडियो बंद है ताकि बैटरी और डेटा बचे।",
+                            color = Color(0xFFA0AEC0),
+                            fontSize = 14.sp,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(36.dp))
+                        Button(
+                            onClick = { viewModel.toggleAudioOnlyMode() },
+                            colors = ButtonDefaults.buttonColors(containerColor = CctvSuccessGreen),
+                            shape = RoundedCornerShape(24.dp),
+                            modifier = Modifier.height(50.dp).fillMaxWidth(0.7f)
+                        ) {
+                            Icon(Icons.Default.Videocam, contentDescription = "Turn on video", tint = Color.White)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("वीडियो चालू करें", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            } else if (isViewerWebRtcActive && webRtcSession != null) {
                 WebRtcVideoPlayer(
                     videoTrack = webRtcVideoTrack,
                     eglBase = webRtcSession.eglBase,
@@ -224,6 +276,24 @@ fun ViewerModeScreen(
                         Icon(
                             Icons.Default.Cameraswitch, 
                             contentDescription = "Switch Camera", 
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+
+                    // Audio Only Mode Toggle Button
+                    IconButton(
+                        onClick = { viewModel.toggleAudioOnlyMode() },
+                        modifier = Modifier
+                            .size(54.dp)
+                            .background(
+                                if (isAudioOnlyMode) CctvSuccessGreen else Color(0x77000000), 
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            imageVector = if (isAudioOnlyMode) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
+                            contentDescription = "Audio Only",
                             tint = Color.White,
                             modifier = Modifier.size(26.dp)
                         )

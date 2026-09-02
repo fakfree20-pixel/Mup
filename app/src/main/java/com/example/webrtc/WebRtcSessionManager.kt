@@ -436,6 +436,20 @@ class WebRtcSessionManager(
         configureAudioManager()
     }
 
+    fun enableLocalVideo(enable: Boolean) {
+        if (!isCameraMode) return
+        localVideoTrack?.setEnabled(enable)
+        try {
+            if (enable) {
+                videoCapturer?.startCapture(1280, 720, 30)
+            } else {
+                videoCapturer?.stopCapture()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error toggling local video: ${e.message}")
+        }
+    }
+
     private fun createCameraCapturer(isFront: Boolean): VideoCapturer? {
         val enumerator = Camera2Enumerator(context)
         val deviceNames = enumerator.deviceNames

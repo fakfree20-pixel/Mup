@@ -207,6 +207,9 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     private val _isViewerMicTalking = MutableStateFlow(false)
     val isViewerMicTalking: StateFlow<Boolean> = _isViewerMicTalking
 
+    private val _isAudioOnlyMode = MutableStateFlow(false)
+    val isAudioOnlyMode: StateFlow<Boolean> = _isAudioOnlyMode
+
     init {
         // Setup battery monitoring
         batteryMonitor = com.example.camera.BatteryMonitor(getApplication()) { level, isCharging ->
@@ -424,6 +427,14 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             "DISABLE_BLACKOUT" -> {
                 _isPowerSaverActive.value = false
                 "Screen blackout disabled"
+            }
+            "PAUSE_VIDEO" -> {
+                cameraWebRtcSession?.enableLocalVideo(false)
+                "Video paused"
+            }
+            "RESUME_VIDEO" -> {
+                cameraWebRtcSession?.enableLocalVideo(true)
+                "Video resumed"
             }
             else -> "Unknown command"
         }
@@ -683,6 +694,18 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             showToast(if (newState) "🗣️ WebRTC 2-Way Audio ON" else "🔇 WebRTC 2-Way Audio OFF")
         } else {
             cctvClient.toggleTwoWayTalk(viewModelScope)
+        }
+    }
+
+    fun toggleAudioOnlyMode() {
+        val newState = !_isAudioOnlyMode.value
+        _isAudioOnlyMode.value = newState
+        if (newState) {
+            sendRemoteCommand("PAUSE_VIDEO")
+            showToast("🎧 Audio-Only Mode ON (Video Paused)")
+        } else {
+            sendRemoteCommand("RESUME_VIDEO")
+            showToast("📹 Video ON")
         }
     }
 
