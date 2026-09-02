@@ -75,16 +75,19 @@ class WebRtcSignalingClient(
         }
     }
 
+    private var sessionStartTime = System.currentTimeMillis()
+
     fun start(scope: CoroutineScope) {
         if (isRunning) return
         isRunning = true
+        sessionStartTime = System.currentTimeMillis()
         onStateChanged?.invoke("Connecting to Global Relay...")
 
         job = scope.launch(Dispatchers.IO) {
             // 1. Start HTTPS Event Stream (Bypasses all Saudi/India cellular blocks)
             launch { startHttpsStream() }
             
-            // 2. Start HTTP Poll Fallback every 3 seconds to guarantee 0 message drops
+            // 2. Start HTTP Poll Fallback to guarantee 0 message drops
             launch { startHttpPollingLoop() }
 
             // 3. Start MQTT/MQTTS in parallel for sub-50ms peer signaling
@@ -96,8 +99,7 @@ class WebRtcSignalingClient(
      * HTTPS Real-time event stream via ntfy.sh (Port 443 - zero block on STC/Lebara/Airtel).
      */
     private suspend fun startHttpsStream() {
-        // Query recent messages (since 30s) on connection so no handshakes are missed
-        val streamUrl = "https://ntfy.sh/$listenTopic/json?since=30s"
+        val streamUrl = "https://ntfy.sh/$listenTopic/json?since=10s"
         Log.d(TAG, "Starting HTTPS signaling stream on $streamUrl")
 
         while (isRunning) {
@@ -136,10 +138,10 @@ class WebRtcSignalingClient(
     }
 
     /**
-     * Regular poll fallback every 2.5 seconds to guarantee connection even if SSE breaks
+     * Regular poll fallback every 3.5 seconds to guarantee connection even if SSE breaks
      */
     private suspend fun startHttpPollingLoop() {
-        val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=10s"
+        val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=5s"
         while (isRunning) {
             try {
                 val request = Request.Builder()
@@ -157,7 +159,7 @@ class WebRtcSignalingClient(
                     }
                 }
             } catch (_: Exception) {}
-            delay(2500)
+            delay(3500)
         }
     }
 
@@ -232,8 +234,13 @@ class WebRtcSignalingClient(
             val id = json.optString("id")
             val type = json.optString("type")
             val sender = json.optString("senderId")
+            val timestamp = json.optLong("timestamp", System.currentTimeMillis())
 
             if (sender.equals(clientRole, ignoreCase = true)) return
+            if (timestamp < sessionStartTime - 8000L) {
+                // Ignore stale message from an older session
+                return
+            }
             if (id.isNotBlank() && isDuplicate(id)) return
 
             val msg = SignalingMessage(
@@ -246,7 +253,7 @@ class WebRtcSignalingClient(
                 sdpMLineIndex = if (json.has("sdpMLineIndex")) json.getInt("sdpMLineIndex") else null,
                 candidate = if (json.has("candidate")) json.getString("candidate") else null,
                 command = if (json.has("command")) json.getString("command") else null,
-                timestamp = json.optLong("timestamp", System.currentTimeMillis()),
+                timestamp = timestamp,
                 id = if (id.isNotBlank()) id else UUID.randomUUID().toString()
             )
             onMessageReceived(msg)

@@ -178,11 +178,30 @@ class WebRtcSessionManager(
             start(scope)
         }
 
-        // Worldwide Global Auto-Discovery and Keep-Alive loop
+        // Send initial handshake
         scope.launch(Dispatchers.IO) {
+            delay(500)
+            if (!isCameraMode) {
+                signalingClient?.sendMessage(
+                    SignalingMessage(
+                        type = "ROOM_JOINED",
+                        senderId = "VIEWER",
+                        targetRoom = roomId
+                    )
+                )
+            }
+        }
+
+        // Background watchdog: only retry handshake if completely IDLE/WAITING for >8 seconds
+        scope.launch(Dispatchers.IO) {
+            var retryCount = 0
             while (scope.isActive) {
-                if (_connectionState.value != WebRtcConnectionState.CONNECTED) {
-                    if (!isCameraMode) {
+                delay(4000)
+                val state = _connectionState.value
+                if (state == WebRtcConnectionState.WAITING_PEER || state == WebRtcConnectionState.FAILED) {
+                    retryCount++
+                    if (!isCameraMode && retryCount % 2 == 0) {
+                        Log.d(TAG, "Watchdog: Sending ROOM_JOINED retry...")
                         signalingClient?.sendMessage(
                             SignalingMessage(
                                 type = "ROOM_JOINED",
@@ -190,25 +209,11 @@ class WebRtcSessionManager(
                                 targetRoom = roomId
                             )
                         )
-                    } else {
-                        // Camera continuously syncs Offer to fast-connect any arriving viewer
-                        val localDesc = peerConnection?.localDescription
-                        if (localDesc != null && localDesc.type == SessionDescription.Type.OFFER) {
-                            signalingClient?.sendMessage(
-                                SignalingMessage(
-                                    type = "OFFER",
-                                    senderId = "CAMERA",
-                                    targetRoom = roomId,
-                                    sdp = localDesc.description,
-                                    sdpType = localDesc.type.canonicalForm()
-                                )
-                            )
-                        } else if (!isCreatingOffer) {
-                            createAndSendOffer(roomId)
-                        }
+                    } else if (isCameraMode && state == WebRtcConnectionState.FAILED) {
+                        Log.d(TAG, "Watchdog: Restarting ICE on Camera...")
+                        peerConnection?.restartIce()
                     }
                 }
-                delay(2000)
             }
         }
     }
@@ -490,7 +495,7 @@ class WebRtcSessionManager(
                 if (isCameraMode) {
                     val localDesc = peerConnection?.localDescription
                     if (localDesc != null && localDesc.type == SessionDescription.Type.OFFER) {
-                        Log.d(TAG, "Re-sending existing OFFER to Viewer")
+                        Log.d(TAG, "Syncing OFFER to Viewer")
                         val offerMsg = SignalingMessage(
                             type = "OFFER",
                             senderId = "CAMERA",
@@ -514,13 +519,19 @@ class WebRtcSessionManager(
                                 )
                             }
                         }
-                    } else {
+                    } else if (!isCreatingOffer) {
                         createAndSendOffer(msg.targetRoom)
                     }
                 }
             }
             "OFFER" -> {
                 if (!isCameraMode && msg.sdp != null) {
+                    // Do not reprocess offer if we are already actively connected
+                    if (_connectionState.value == WebRtcConnectionState.CONNECTED) {
+                        Log.d(TAG, "Already connected, skipping duplicate OFFER")
+                        return
+                    }
+
                     _connectionState.value = WebRtcConnectionState.EXCHANGING_SDP
                     _statusText.value = "Received Camera stream. Connecting..."
 
@@ -666,43 +677,45 @@ class WebRtcSessionManager(
     }
 
     fun release() {
-        try {
-            signalingClient?.stop()
-            signalingClient = null
+        executor.submit {
+            try {
+                signalingClient?.stop()
+                signalingClient = null
 
-            videoCapturer?.stopCapture()
-            videoCapturer?.dispose()
-            videoCapturer = null
+                videoCapturer?.stopCapture()
+                videoCapturer?.dispose()
+                videoCapturer = null
 
-            surfaceTextureHelper?.dispose()
-            surfaceTextureHelper = null
+                surfaceTextureHelper?.dispose()
+                surfaceTextureHelper = null
 
-            localVideoTrack?.dispose()
-            localVideoTrack = null
+                localVideoTrack?.dispose()
+                localVideoTrack = null
 
-            localAudioTrack?.dispose()
-            localAudioTrack = null
+                localAudioTrack?.dispose()
+                localAudioTrack = null
 
-            localVideoSource?.dispose()
-            localVideoSource = null
+                localVideoSource?.dispose()
+                localVideoSource = null
 
-            localAudioSource?.dispose()
-            localAudioSource = null
+                localAudioSource?.dispose()
+                localAudioSource = null
 
-            dataChannel?.close()
-            dataChannel?.dispose()
-            dataChannel = null
+                dataChannel?.close()
+                dataChannel?.dispose()
+                dataChannel = null
 
-            peerConnection?.close()
-            peerConnection?.dispose()
-            peerConnection = null
+                peerConnection?.close()
+                peerConnection?.dispose()
+                peerConnection = null
 
-            peerConnectionFactory?.dispose()
-            peerConnectionFactory = null
+                peerConnectionFactory?.dispose()
+                peerConnectionFactory = null
 
-            rootEglBase.release()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error releasing WebRTC resources", e)
+                rootEglBase.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error releasing WebRTC resources", e)
+            }
         }
     }
 }

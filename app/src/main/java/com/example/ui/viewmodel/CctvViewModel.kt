@@ -490,8 +490,11 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         discovery.stopBroadcasting()
         httpServer?.stop()
         httpServer = null
-        cameraWebRtcSession?.release()
+        val rtcSession = cameraWebRtcSession
         cameraWebRtcSession = null
+        backgroundScope.launch {
+            rtcSession?.release()
+        }
         audioStreamManager.stopMicrophoneStreaming()
         audioStreamManager.stopSpeakerAudio()
         audioStreamManager.stopSiren()
@@ -559,10 +562,13 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnectWebRtc() {
-        viewerWebRtcSession?.release()
+        val session = viewerWebRtcSession
         viewerWebRtcSession = null
         _isViewerWebRtcActive.value = false
         _webRtcStatus.value = "Disconnected"
+        backgroundScope.launch {
+            session?.release()
+        }
     }
 
     // 2. Connect via Local Wi-Fi / Hotspot LAN
