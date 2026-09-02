@@ -175,18 +175,6 @@ class WebRtcSessionManager(
 
         setupPeerConnection(scope)
 
-        if (isCameraMode) {
-            setupCameraMediaTracks(currentIsFrontCamera)
-            _statusText.value = "Camera is live. Waiting for Viewer..."
-            
-            // Auto create offer so it's ready immediately
-            createAndSendOffer(roomId)
-        } else {
-            setupViewerMediaTracks()
-            _connectionState.value = WebRtcConnectionState.WAITING_PEER
-            _statusText.value = "Connecting to Camera..."
-        }
-
         signalingClient = WebRtcSignalingClient(
             clientRole = if (isCameraMode) "CAMERA" else "VIEWER",
             roomId = roomId,
@@ -200,10 +188,21 @@ class WebRtcSessionManager(
             start(scope)
         }
 
-        // Send initial handshake immediately
-        scope.launch(Dispatchers.IO) {
-            delay(300)
-            if (!isCameraMode) {
+        if (isCameraMode) {
+            setupCameraMediaTracks(currentIsFrontCamera)
+            _statusText.value = "Camera is live. Waiting for Viewer..."
+            
+            scope.launch(Dispatchers.IO) {
+                delay(500)
+                createAndSendOffer(roomId)
+            }
+        } else {
+            setupViewerMediaTracks()
+            _connectionState.value = WebRtcConnectionState.WAITING_PEER
+            _statusText.value = "Connecting to Camera..."
+
+            scope.launch(Dispatchers.IO) {
+                delay(400)
                 signalingClient?.sendMessage(
                     SignalingMessage(
                         type = "ROOM_JOINED",
@@ -214,13 +213,13 @@ class WebRtcSessionManager(
             }
         }
 
-        // Background watchdog: actively syncs handshake until fully CONNECTED
+        // Background watchdog: only retry ROOM_JOINED if waiting for peer
         scope.launch(Dispatchers.IO) {
             var retryCount = 0
             while (scope.isActive) {
-                delay(2500)
+                delay(4000)
                 val state = _connectionState.value
-                if (state != WebRtcConnectionState.CONNECTED) {
+                if (state == WebRtcConnectionState.WAITING_PEER || state == WebRtcConnectionState.FAILED) {
                     retryCount++
                     if (!isCameraMode) {
                         Log.d(TAG, "Watchdog ($retryCount): Sending ROOM_JOINED sync...")
@@ -235,6 +234,9 @@ class WebRtcSessionManager(
                         Log.d(TAG, "Watchdog: Restarting ICE on Camera...")
                         peerConnection?.restartIce()
                     }
+                } else if (state == WebRtcConnectionState.CONNECTED || state == WebRtcConnectionState.EXCHANGING_SDP) {
+                    // Reset retry count once connection establishes or exchanges sdp
+                    retryCount = 0
                 }
             }
         }
@@ -572,8 +574,39 @@ class WebRtcSessionManager(
         when (msg.type) {
             "ROOM_JOINED" -> {
                 if (isCameraMode) {
-                    Log.d(TAG, "ROOM_JOINED received from Viewer. Resetting PeerConnection for fresh handshake...")
-                    resetPeerConnectionForFreshOffer(scope, msg.targetRoom.ifBlank { currentRoomId })
+                    if (_connectionState.value == WebRtcConnectionState.CONNECTED) {
+                        Log.d(TAG, "Already connected, ignoring ROOM_JOINED")
+                        return
+                    }
+                    val localDesc = peerConnection?.localDescription
+                    if (localDesc != null && localDesc.type == SessionDescription.Type.OFFER) {
+                        Log.d(TAG, "Syncing existing OFFER to Viewer")
+                        val offerMsg = SignalingMessage(
+                            type = "OFFER",
+                            senderId = "CAMERA",
+                            targetRoom = msg.targetRoom.ifBlank { currentRoomId },
+                            sdp = localDesc.description,
+                            sdpType = localDesc.type.canonicalForm()
+                        )
+                        signalingClient?.sendMessage(offerMsg)
+
+                        synchronized(localIceCandidates) {
+                            for (cand in localIceCandidates) {
+                                signalingClient?.sendMessage(
+                                    SignalingMessage(
+                                        type = "ICE_CANDIDATE",
+                                        senderId = "CAMERA",
+                                        targetRoom = msg.targetRoom.ifBlank { currentRoomId },
+                                        sdpMid = cand.sdpMid,
+                                        sdpMLineIndex = cand.sdpMLineIndex,
+                                        candidate = cand.sdp
+                                    )
+                                )
+                            }
+                        }
+                    } else if (!isCreatingOffer) {
+                        createAndSendOffer(msg.targetRoom.ifBlank { currentRoomId })
+                    }
                 }
             }
             "OFFER" -> {
