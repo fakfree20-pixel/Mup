@@ -3,6 +3,7 @@ package com.example.ui.screens
 import android.app.Activity
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -456,6 +457,64 @@ fun CameraModeScreen(
                                 uncheckedTrackColor = Color(0xFF263238)
                             )
                         )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Flip Camera Card
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { viewModel.switchCameraLens(lifecycleOwner, null) },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = CctvCardBg)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF673AB7)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Cameraswitch,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = if (language == AppLanguage.HINDI) "🔄 कैमरा पलटें (फ्रंट / बैक)" else "🔄 Switch Camera (Front/Back)",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (language == AppLanguage.HINDI) "आगे या पीछे का कैमरा बदलें" else "Change between front and back camera",
+                                    fontSize = 12.sp,
+                                    color = CctvTextSecondary
+                                )
+                            }
+                        }
+                        Button(
+                            onClick = { viewModel.switchCameraLens(lifecycleOwner, null) },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF673AB7)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(if (language == AppLanguage.HINDI) "बदलें" else "Switch")
+                        }
                     }
                 }
 

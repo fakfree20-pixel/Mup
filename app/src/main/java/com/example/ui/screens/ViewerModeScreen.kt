@@ -298,6 +298,16 @@ fun ViewerModeScreen(
                     ) {
                         Icon(Icons.Default.FlashlightOn, contentDescription = "Flashlight", tint = Color.White, modifier = Modifier.size(24.dp))
                     }
+
+                    // Switch Camera (Front/Back)
+                    IconButton(
+                        onClick = { viewModel.remoteSwitchCamera() },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(Color(0x77000000), CircleShape)
+                    ) {
+                        Icon(Icons.Default.Cameraswitch, contentDescription = "Switch Camera", tint = Color.White, modifier = Modifier.size(24.dp))
+                    }
                     
                     // Speakerphone Toggle (हैंड्स-फ्री)
                     IconButton(
