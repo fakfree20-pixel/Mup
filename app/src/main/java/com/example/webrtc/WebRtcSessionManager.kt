@@ -237,19 +237,9 @@ class WebRtcSessionManager(
         }
 
         if (isCameraMode) {
-            _connectionState.value = WebRtcConnectionState.CONNECTING_P2P
-            _statusText.value = "Starting camera and broadcasting..."
-            startCameraHardware(isFrontCamera)
-            scope.launch(Dispatchers.IO) {
-                delay(600)
-                localVideoTrack?.let {
-                    peerConnection?.addTrack(it, listOf("cctv_stream"))
-                }
-                localAudioTrack?.let {
-                    peerConnection?.addTrack(it, listOf("cctv_stream"))
-                }
-                createAndSendOffer(roomId)
-            }
+            _connectionState.value = WebRtcConnectionState.WAITING_PEER
+            _statusText.value = "Standby: Waiting for Viewer to connect..."
+            // Camera hardware and microphone stay OFF until Viewer connects (ROOM_JOINED)
         } else {
             setupViewerMediaTracks()
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
@@ -746,6 +736,10 @@ class WebRtcSessionManager(
     }
 
     private fun resetPeerConnectionForFreshOffer(scope: CoroutineScope, roomId: String) {
+        if (isCameraHardwareActive && peerConnection != null && _connectionState.value == WebRtcConnectionState.CONNECTED) {
+            Log.d(TAG, "Already connected and camera active, ignoring duplicate ROOM_JOINED")
+            return
+        }
         executor.submit {
             try {
                 Log.d(TAG, "Resetting PeerConnection for new/reconnecting viewer in room $roomId")
