@@ -237,9 +237,19 @@ class WebRtcSessionManager(
         }
 
         if (isCameraMode) {
-            _connectionState.value = WebRtcConnectionState.WAITING_PEER
-            _statusText.value = "Standby: Waiting for Viewer to connect..."
-            // Camera hardware and microphone stay OFF until Viewer connects (ROOM_JOINED)
+            _connectionState.value = WebRtcConnectionState.CONNECTING_P2P
+            _statusText.value = "Starting camera and broadcasting..."
+            startCameraHardware(isFrontCamera)
+            scope.launch(Dispatchers.IO) {
+                delay(600)
+                localVideoTrack?.let {
+                    peerConnection?.addTrack(it, listOf("cctv_stream"))
+                }
+                localAudioTrack?.let {
+                    peerConnection?.addTrack(it, listOf("cctv_stream"))
+                }
+                createAndSendOffer(roomId)
+            }
         } else {
             setupViewerMediaTracks()
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
@@ -678,7 +688,7 @@ class WebRtcSessionManager(
         isCreatingOffer = true
 
         val sdpConstraints = MediaConstraints().apply {
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
         }
 

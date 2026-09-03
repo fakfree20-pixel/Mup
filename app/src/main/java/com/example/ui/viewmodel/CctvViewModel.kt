@@ -392,11 +392,10 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             backgroundLifecycleOwner = it
         }
 
-        // Note: We intentionally DO NOT start CameraX or AudioStreamManager here.
-        // This is to maintain absolute stealth (no green privacy dots on Android 12+) 
-        // until a Viewer actually connects. WebRTC will open the camera and mic 
-        // ONLY when the viewer joins.
-        _isCameraStreaming.value = true
+        // 1. Setup CameraX for local display & torch support
+        cameraManager.startCamera(activeOwner, previewView) {
+            _isCameraStreaming.value = true
+        }
 
         // 4. Start WebRTC Session for Mobile Data / Cellular P2P low latency
         cameraWebRtcSession = WebRtcSessionManager(
@@ -948,6 +947,9 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             val newState = !_isViewerMicTalking.value
             _isViewerMicTalking.value = newState
             viewerWebRtcSession?.enableViewerTwoWayAudio(newState)
+            if (newState) {
+                sendRemoteCommand("SET_SPEAKERPHONE:1")
+            }
             showToast(if (newState) "🗣️ WebRTC 2-Way Audio ON" else "🔇 WebRTC 2-Way Audio OFF")
         } else {
             cctvClient.toggleTwoWayTalk(viewModelScope)
