@@ -58,6 +58,7 @@ fun ViewerModeScreen(
     val webRtcStatus by viewModel.webRtcStatus.collectAsState()
     val isAudioOnlyMode by viewModel.isAudioOnlyMode.collectAsState()
     val isVoiceFilterEnabled by viewModel.isVoiceFilterEnabled.collectAsState()
+    val isSpeakerphoneOn by viewModel.isSpeakerphoneOn.collectAsState()
     val remoteTelemetry by viewModel.remoteTelemetry.collectAsState()
 
     var showSecurityLockDialog by remember { mutableStateOf(false) }
@@ -280,89 +281,37 @@ fun ViewerModeScreen(
                     }
                 }
                 
-                // Bottom Bar Controls
+                // Secondary Controls Row (Torch, Switch Camera, Audio Only)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 36.dp, start = 28.dp, end = 28.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                        .padding(bottom = 24.dp, start = 48.dp, end = 48.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Two Way Voice Talk (माइक से बोलें)
+                    // Flashlight
                     IconButton(
-                        onClick = {
-                            val hasPermission = ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.RECORD_AUDIO
-                            ) == PackageManager.PERMISSION_GRANTED
-
-                            if (hasPermission) {
-                                viewModel.toggleViewerMic()
-                            } else {
-                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                            }
-                        },
+                        onClick = { viewModel.sendRemoteCommand("TOGGLE_TORCH") },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(if (remoteTelemetry.isTorchOn) CctvSuccessGreen else Color(0x77000000), CircleShape)
+                    ) {
+                        Icon(Icons.Default.FlashlightOn, contentDescription = "Flashlight", tint = Color.White, modifier = Modifier.size(24.dp))
+                    }
+                    
+                    // Speakerphone Toggle (हैंड्स-फ्री)
+                    IconButton(
+                        onClick = { viewModel.toggleSpeakerphone() },
                         modifier = Modifier
                             .size(54.dp)
                             .background(
-                                if (isViewerMicOn) CctvSuccessGreen else Color(0x77000000), 
+                                if (isSpeakerphoneOn) CctvSuccessGreen else Color(0x77000000), 
                                 CircleShape
                             )
                     ) {
                         Icon(
-                            imageVector = if (isViewerMicOn) Icons.Default.Mic else Icons.Default.MicOff,
-                            contentDescription = "2-Way Talk",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
-                    
-                    // Shutter Button (Snapshot / फोटो खींचें)
-                    Box(
-                        modifier = Modifier
-                            .size(76.dp)
-                            .clip(CircleShape)
-                            .background(Color.White)
-                            .clickable { viewModel.takeRemoteSnapshot() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(64.dp)
-                                .clip(CircleShape)
-                                .background(Color.White)
-                                .border(3.dp, Color.Black, CircleShape)
-                        )
-                    }
-                    
-                    // Remote Switch Camera (Front/Back)
-                    IconButton(
-                        onClick = { viewModel.sendRemoteCommand("SWITCH_CAMERA") },
-                        modifier = Modifier
-                            .size(54.dp)
-                            .background(Color(0x77000000), CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Default.Cameraswitch, 
-                            contentDescription = "Switch Camera", 
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
-
-                    // Audio Only Mode Toggle Button
-                    IconButton(
-                        onClick = { viewModel.toggleAudioOnlyMode() },
-                        modifier = Modifier
-                            .size(54.dp)
-                            .background(
-                                if (isAudioOnlyMode) CctvSuccessGreen else Color(0x77000000), 
-                                CircleShape
-                            )
-                    ) {
-                        Icon(
-                            imageVector = if (isAudioOnlyMode) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
-                            contentDescription = "Audio Only",
+                            imageVector = if (isSpeakerphoneOn) Icons.Default.VolumeUp else Icons.Default.PhoneInTalk,
+                            contentDescription = "Speakerphone",
                             tint = Color.White,
                             modifier = Modifier.size(26.dp)
                         )
@@ -374,14 +323,14 @@ fun ViewerModeScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(CctvDarkBg)
+                    .background(Color(0xFF0F1117))
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
                 if (isAttemptingConnection) {
                     CircularProgressIndicator(
-                        color = CctvIceBlue,
+                        color = Color(0xFFCE93D8),
                         modifier = Modifier.size(52.dp),
                         strokeWidth = 4.dp
                     )
@@ -389,339 +338,148 @@ fun ViewerModeScreen(
                     Text(
                         text = if (language == AppLanguage.HINDI) "कैमरा से कनेक्ट हो रहा है..." else "Connecting to Camera...",
                         color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 16.sp
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.CameraAlt,
+                        contentDescription = "Camera",
+                        modifier = Modifier.size(72.dp),
+                        tint = Color(0xFFCE93D8)
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Text(
+                        text = if (language == AppLanguage.HINDI) "कैमरा से जुड़ें" else "Connect to Camera",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = webRtcStatus,
-                        color = CctvTextMuted,
-                        fontSize = 13.sp,
-                        textAlign = TextAlign.Center
+                        text = if (language == AppLanguage.HINDI) "पुराने फोन का रूम पिन डालें" else "Enter old phone's Room PIN",
+                        fontSize = 14.sp,
+                        color = Color.Gray
                     )
-                    Spacer(modifier = Modifier.height(28.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.disconnectWebRtc() },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = CctvAlertRed)
-                    ) {
-                        Text(if (language == AppLanguage.HINDI) "रद्द करें (Cancel)" else "Cancel")
-                    }
-                } else {
-                    Card(
+                    Spacer(modifier = Modifier.height(32.dp))
+                    
+                    OutlinedTextField(
+                        value = roomPinInput,
+                        onValueChange = { viewModel.setViewerRoomPinInput(it) },
+                        label = { Text("Room PIN") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color(0xFFCE93D8),
+                            unfocusedBorderColor = Color.Gray,
+                            cursorColor = Color(0xFFCE93D8)
+                        ),
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
+                    )
+                    
+                    Spacer(modifier = Modifier.height(24.dp))
+                    
+                    Button(
+                        onClick = { viewModel.connectToCamera(roomPinInput) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(1.dp, CctvCardBorder, RoundedCornerShape(24.dp)),
-                        shape = RoundedCornerShape(24.dp),
-                        colors = CardDefaults.cardColors(containerColor = CctvCardBg)
+                            .height(56.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF673AB7)
+                        )
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Videocam,
-                                contentDescription = null,
-                                tint = CctvIceBlue,
-                                modifier = Modifier.size(40.dp)
-                            )
-                            
-                            Spacer(modifier = Modifier.height(12.dp))
-                            
-                            Text(
-                                text = if (language == AppLanguage.HINDI) "कैमरा रूम पिन डालें" else "Enter Camera Room PIN",
-                                color = Color.White,
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            
-                            Spacer(modifier = Modifier.height(6.dp))
-                            
-                            Text(
-                                text = if (language == AppLanguage.HINDI) "पुराने फोन में दिख रहा 6-अंकों का कोड यहाँ लिखें" else "Enter the 6-digit PIN from the Old Phone",
-                                color = CctvTextSecondary,
-                                fontSize = 13.sp,
-                                textAlign = TextAlign.Center
-                            )
-                            
-                            Spacer(modifier = Modifier.height(20.dp))
-                            
-                            OutlinedTextField(
-                                value = roomPinInput,
-                                onValueChange = { viewModel.setViewerRoomPinInput(it.filter { ch -> ch.isLetterOrDigit() }.uppercase()) },
-                                placeholder = { 
-                                    Text(
-                                        "123456", 
-                                        color = CctvTextMuted, 
-                                        fontFamily = FontFamily.Monospace,
-                                        modifier = Modifier.fillMaxWidth(),
-                                        textAlign = TextAlign.Center
-                                    ) 
-                                },
-                                textStyle = LocalTextStyle.current.copy(
-                                    fontSize = 24.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace,
-                                    textAlign = TextAlign.Center,
-                                    letterSpacing = 4.sp
-                                ),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White,
-                                    focusedBorderColor = CctvNavyHover,
-                                    unfocusedBorderColor = CctvCardBorder,
-                                    focusedContainerColor = CctvNavyDark,
-                                    unfocusedContainerColor = CctvDarkBg
-                                ),
-                                singleLine = true,
-                                shape = RoundedCornerShape(14.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            
-                            Spacer(modifier = Modifier.height(24.dp))
-                            
-                            Button(
-                                onClick = { viewModel.connectWebRtc(roomPinInput) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(54.dp),
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = CctvNavyPrimary,
-                                    contentColor = CctvIceBlue
-                                )
-                            ) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = if (language == AppLanguage.HINDI) "लाइव वीडियो चालू करें" else "START LIVE VIDEO",
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
+                        Text(
+                            text = if (language == AppLanguage.HINDI) "कनेक्ट करें" else "CONNECT",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }
         }
-
-        // --- MASTER REMOTE SECURITY & PHONE LOCK DIALOG ---
+        
+        // Security Lock Dialog
         if (showSecurityLockDialog) {
             AlertDialog(
                 onDismissRequest = { showSecurityLockDialog = false },
-                icon = {
-                    Icon(
-                        imageVector = Icons.Default.Security,
-                        contentDescription = null,
-                        tint = Color(0xFF9C27B0),
-                        modifier = Modifier.size(36.dp)
-                    )
-                },
                 title = {
                     Text(
-                        text = if (language == AppLanguage.HINDI) "🔒 पुराना फोन रिमोट लॉक व सुरक्षा" else "🔒 Remote Security & Lock",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
-                        textAlign = TextAlign.Center
+                        text = if (language == AppLanguage.HINDI) "कैमरा नियंत्रण" else "Camera Controls",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
                     )
                 },
                 text = {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp)
-                    ) {
-                        Text(
-                            text = if (language == AppLanguage.HINDI)
-                                "नई मोबाइल से यहाँ नया लॉक कोड सेट करें। कोड डालते ही पुराना फोन तुरंत लॉक हो जाएगा ताकि कोई उसे डिलीट या बंद न कर सके।"
-                            else
-                                "Set a security PIN to remotely lock the camera phone. The old phone will be locked instantly to prevent unauthorized deletion or tampering.",
-                            fontSize = 13.sp,
-                            color = Color(0xFFCBD5E1),
-                            lineHeight = 18.sp
-                        )
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        // 🔋 Live Battery Status of Old Phone
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF261D3B))
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = if (language == AppLanguage.HINDI) "🔋 पुराने फोन की बैटरी:" else "🔋 Old Phone Battery:",
-                                        fontSize = 13.sp,
-                                        color = Color(0xFFD1C4E9),
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    CameraPhoneBatteryBadge(
-                                        level = remoteTelemetry.batteryLevel,
-                                        isCharging = remoteTelemetry.isCharging,
-                                        showLabel = false,
-                                        isHindi = (language == AppLanguage.HINDI)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = if (language == AppLanguage.HINDI) {
-                                        if (remoteTelemetry.isCharging) "⚡ चार्जर लगा हुआ है (Charging - ${remoteTelemetry.batteryLevel}%)" else "🔋 बैटरी पर चल रहा है (${remoteTelemetry.batteryLevel}%)"
-                                    } else {
-                                        if (remoteTelemetry.isCharging) "⚡ Charger connected (Charging - ${remoteTelemetry.batteryLevel}%)" else "🔋 Running on battery (${remoteTelemetry.batteryLevel}%)"
-                                    },
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = if (remoteTelemetry.isCharging) Color(0xFF00E676) else if (remoteTelemetry.batteryLevel <= 20) Color(0xFFFF5252) else Color(0xFFB0BEC5)
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-
+                    Column(modifier = Modifier.fillMaxWidth()) {
                         Text(
                             text = if (language == AppLanguage.HINDI) "सुरक्षा पिन (4-6 अंक):" else "Security PIN (4-6 digits):",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Color.White
                         )
-
                         Spacer(modifier = Modifier.height(6.dp))
-
                         OutlinedTextField(
                             value = securityPinInput,
                             onValueChange = { if (it.length <= 6 && it.all { ch -> ch.isDigit() }) securityPinInput = it },
-                            placeholder = { Text("उदा. 1234 या 5678", color = Color.Gray) },
+                            placeholder = { Text("e.g. 1234", color = Color.Gray) },
                             singleLine = true,
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedTextColor = Color.White,
                                 unfocusedTextColor = Color.White,
-                                focusedBorderColor = Color(0xFFAB47BC),
-                                unfocusedBorderColor = Color(0xFF4A148C),
-                                focusedContainerColor = Color(0xFF1E1B2E),
-                                unfocusedContainerColor = Color(0xFF12111A)
+                                focusedBorderColor = Color(0xFFCE93D8),
+                                unfocusedBorderColor = Color.Gray
                             ),
-                            shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth()
                         )
-
                         Spacer(modifier = Modifier.height(16.dp))
-
-                        // Lock Button
+                        
                         Button(
                             onClick = {
                                 val pinToSet = if (securityPinInput.isNotBlank()) securityPinInput else "1234"
                                 viewModel.setRemoteSecurityPin(pinToSet)
                                 showSecurityLockDialog = false
                             },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(46.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF673AB7),
-                                contentColor = Color.White
-                            )
+                            modifier = Modifier.fillMaxWidth().height(46.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF673AB7))
                         ) {
-                            Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (language == AppLanguage.HINDI) "🔒 कोड डालें व फोन तुरंत लॉक करें" else "🔒 Set PIN & Lock Old Phone",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Text(if (language == AppLanguage.HINDI) "🔒 लॉक करें" else "🔒 Lock Camera Screen")
                         }
-
+                        
                         Spacer(modifier = Modifier.height(10.dp))
-
-                        // Unlock Button
+                        
                         OutlinedButton(
                             onClick = {
                                 viewModel.unlockCameraScreenRemotely()
                                 showSecurityLockDialog = false
                             },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(44.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = Color(0xFF4CAF50)
-                            )
+                            modifier = Modifier.fillMaxWidth().height(46.dp)
                         ) {
-                            Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (language == AppLanguage.HINDI) "🔓 पुराना फोन अनलॉक करें" else "🔓 Unlock Camera Remotely",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Text(if (language == AppLanguage.HINDI) "🔓 अनलॉक करें" else "🔓 Unlock Camera Screen")
                         }
-
+                        
                         Spacer(modifier = Modifier.height(10.dp))
-
-                        // Voice Isolation Filter Button
+                        
                         Button(
-                            onClick = {
-                                viewModel.toggleVoiceFilter()
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(44.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isVoiceFilterEnabled) Color(0xFF00897B) else Color(0xFF455A64),
-                                contentColor = Color.White
-                            )
+                            onClick = { viewModel.toggleVoiceFilter() },
+                            modifier = Modifier.fillMaxWidth().height(46.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = if (isVoiceFilterEnabled) Color(0xFF00897B) else Color(0xFF455A64))
                         ) {
-                            Icon(Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (isVoiceFilterEnabled) {
-                                    if (language == AppLanguage.HINDI) "🎙️ गाड़ी का शोर बंद (फ़िल्टर ON)" else "🎙️ Traffic Noise Filter (ON)"
-                                } else {
-                                    if (language == AppLanguage.HINDI) "🎙️ नॉइज़ फ़िल्टर चालू करें" else "🎙️ Turn On Noise Filter"
-                                },
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            Text(if (isVoiceFilterEnabled) "🎙️ Filter ON" else "🎙️ Filter OFF")
                         }
-
+                        
                         Spacer(modifier = Modifier.height(10.dp))
-
-                        // Stealth Black Screen
+                        
                         Button(
                             onClick = {
                                 viewModel.remoteToggleBlackout()
                                 showSecurityLockDialog = false
                             },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(44.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF263238),
-                                contentColor = Color(0xFFB0BEC5)
-                            )
+                            modifier = Modifier.fillMaxWidth().height(46.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF263238))
                         ) {
-                            Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (language == AppLanguage.HINDI) "🕶️ स्टील्थ स्क्रीन (काली स्क्रीन)" else "🕶️ Stealth Black Screen",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            Text("🕶️ Stealth Black Screen")
                         }
                     }
                 },
@@ -730,8 +488,7 @@ fun ViewerModeScreen(
                         Text(if (language == AppLanguage.HINDI) "बंद करें" else "Close", color = Color(0xFFCE93D8))
                     }
                 },
-                containerColor = Color(0xFF181524),
-                shape = RoundedCornerShape(24.dp)
+                containerColor = Color(0xFF181524)
             )
         }
     }

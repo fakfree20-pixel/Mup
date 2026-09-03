@@ -136,6 +136,20 @@ class WebRtcSessionManager(
         configureAudioManager()
     }
 
+    fun setSpeakerphoneEnabled(isEnabled: Boolean) {
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            am?.let {
+                it.mode = AudioManager.MODE_IN_COMMUNICATION
+                it.isSpeakerphoneOn = isEnabled
+                it.setSpeakerphoneOn(isEnabled)
+                Log.d(TAG, "Speakerphone set to $isEnabled")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting speakerphone", e)
+        }
+    }
+
     private fun configureAudioManager() {
         try {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager

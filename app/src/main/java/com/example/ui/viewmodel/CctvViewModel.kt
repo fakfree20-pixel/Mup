@@ -236,6 +236,9 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     private val _isAudioOnlyMode = MutableStateFlow(false)
     val isAudioOnlyMode: StateFlow<Boolean> = _isAudioOnlyMode
 
+    private val _isSpeakerphoneOn = MutableStateFlow(true)
+    val isSpeakerphoneOn: StateFlow<Boolean> = _isSpeakerphoneOn
+
     init {
         // Setup battery monitoring
         batteryMonitor = com.example.camera.BatteryMonitor(getApplication()) { level, isCharging ->
@@ -603,6 +606,12 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 "Snapshot taken"
             }
+            action.startsWith("SET_SPEAKERPHONE:") -> {
+                val isOn = action.substringAfter("SET_SPEAKERPHONE:").trim() == "1"
+                _isSpeakerphoneOn.value = isOn
+                cameraWebRtcSession?.setSpeakerphoneEnabled(isOn)
+                "Speakerphone set to $isOn"
+            }
             action == "GET_TELEMETRY" -> {
                 broadcastCurrentTelemetry()
                 "Telemetry broadcasted"
@@ -632,7 +641,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             }
             action == "VIEWER_DISCONNECT" || action == "STOP_STREAM" -> {
                 _connectedViewersCount.value = 0
-                backgroundScope.launch { cameraWebRtcSession?.stopCameraHardware() }
+                // WebRtcSessionManager handles this internally via signaling/DataChannel
                 try {
                     cameraManager.setTorch(false)
                 } catch (_: Exception) {}
@@ -640,7 +649,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             }
             action == "START_STREAM" || action == "VIEWER_CONNECT" -> {
                 _connectedViewersCount.value = 1
-                cameraWebRtcSession?.startCameraHardware(cameraManager.currentLens == CameraLens.FRONT)
+                // WebRtcSessionManager handles this internally via ROOM_JOINED signaling
                 "Camera hardware activated on demand"
             }
             else -> "Unknown command: $action"
@@ -955,6 +964,19 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             sendRemoteCommand("RESUME_VIDEO")
             showToast("📹 Video ON")
         }
+    }
+
+    fun toggleSpeakerphone() {
+        val newState = !_isSpeakerphoneOn.value
+        _isSpeakerphoneOn.value = newState
+        
+        // Apply locally to Viewer
+        viewerWebRtcSession?.setSpeakerphoneEnabled(newState)
+        
+        // Also send command to Camera so both sides toggle
+        sendRemoteCommand("SET_SPEAKERPHONE:${if (newState) "1" else "0"}")
+        
+        showToast(if (newState) "🔊 Speakerphone ON" else "🔈 Speakerphone OFF")
     }
 
     fun remoteSwitchCamera() {
