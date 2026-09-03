@@ -381,7 +381,7 @@ fun ViewerModeScreen(
                     Spacer(modifier = Modifier.height(24.dp))
                     
                     Button(
-                        onClick = { viewModel.connectToCamera(roomPinInput) },
+                        onClick = { viewModel.connectWebRtc(roomPinInput) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp),
