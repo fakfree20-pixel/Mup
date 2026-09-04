@@ -197,8 +197,16 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- VIEWER MODE STATE (New Phone) ---
     val cctvClient = CctvClient()
-    var viewerWebRtcSession: WebRtcSessionManager? = null
-        private set
+    private val _viewerWebRtcSession = MutableStateFlow<WebRtcSessionManager?>(null)
+    val viewerWebRtcSessionState: StateFlow<WebRtcSessionManager?> = _viewerWebRtcSession
+    val viewerWebRtcSession: WebRtcSessionManager?
+        get() = _viewerWebRtcSession.value
+
+    private val _viewerConnectionState = MutableStateFlow(WebRtcConnectionState.DISCONNECTED)
+    val viewerConnectionState: StateFlow<WebRtcConnectionState> = _viewerConnectionState
+
+    private val _viewerRemoteVideoTrack = MutableStateFlow<org.webrtc.VideoTrack?>(null)
+    val viewerRemoteVideoTrack: StateFlow<org.webrtc.VideoTrack?> = _viewerRemoteVideoTrack
 
     private val _remoteTelemetry = MutableStateFlow(CameraTelemetry())
     val remoteTelemetry: StateFlow<CameraTelemetry> = _remoteTelemetry
@@ -760,7 +768,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         _isViewerWebRtcActive.value = true
         _webRtcStatus.value = "Connecting to Room $cleanPin on 4G/5G..."
 
-        viewerWebRtcSession = WebRtcSessionManager(
+        val session = WebRtcSessionManager(
             context = getApplication(),
             isCameraMode = false
         ).apply {
@@ -772,19 +780,21 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 roomId = cleanPin
             )
         }
+        _viewerWebRtcSession.value = session
 
         viewModelScope.launch {
-            viewerWebRtcSession?.statusText?.collect { status ->
+            session.statusText.collect { status ->
                 _webRtcStatus.value = status
             }
         }
 
         viewModelScope.launch {
-            viewerWebRtcSession?.connectionState?.collect { state ->
+            session.connectionState.collect { state ->
+                _viewerConnectionState.value = state
                 when (state) {
                     WebRtcConnectionState.CONNECTED -> {
                         showToast("✅ Live CCTV Connected!")
-                        viewerWebRtcSession?.sendCommand("GET_TELEMETRY")
+                        session.sendCommand("GET_TELEMETRY")
                     }
                     WebRtcConnectionState.CONNECTING_P2P -> {
                         _webRtcStatus.value = "Connecting live stream..."
@@ -797,11 +807,17 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        viewModelScope.launch {
+            session.remoteVideoTrack.collect { track ->
+                _viewerRemoteVideoTrack.value = track
+            }
+        }
+
         // Viewer telemetry poll loop
         viewModelScope.launch {
             while (isActive && _isViewerWebRtcActive.value) {
-                if (viewerWebRtcSession?.connectionState?.value == WebRtcConnectionState.CONNECTED) {
-                    viewerWebRtcSession?.sendCommand("GET_TELEMETRY")
+                if (session.connectionState.value == WebRtcConnectionState.CONNECTED) {
+                    session.sendCommand("GET_TELEMETRY")
                 }
                 delay(3000)
             }
@@ -821,8 +837,10 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnectWebRtc() {
-        val session = viewerWebRtcSession
-        viewerWebRtcSession = null
+        val session = _viewerWebRtcSession.value
+        _viewerWebRtcSession.value = null
+        _viewerConnectionState.value = WebRtcConnectionState.DISCONNECTED
+        _viewerRemoteVideoTrack.value = null
         _isViewerWebRtcActive.value = false
         _webRtcStatus.value = "Disconnected"
         backgroundScope.launch {

@@ -46,9 +46,9 @@ fun ViewerModeScreen(
     val isConnected by viewModel.cctvClient.isConnected.collectAsState()
     val isConnecting by viewModel.cctvClient.isConnecting.collectAsState()
     val latestFrame by viewModel.cctvClient.latestFrame.collectAsState()
-    val webRtcSession = viewModel.viewerWebRtcSession
-    val webRtcConnState = webRtcSession?.connectionState?.collectAsState()?.value ?: WebRtcConnectionState.DISCONNECTED
-    val webRtcVideoTrack by (webRtcSession?.remoteVideoTrack ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
+    val webRtcSession by viewModel.viewerWebRtcSessionState.collectAsState()
+    val webRtcConnState by viewModel.viewerConnectionState.collectAsState()
+    val webRtcVideoTrack by viewModel.viewerRemoteVideoTrack.collectAsState()
     
     val savedCameras by viewModel.savedCameras.collectAsState()
     val isViewerWebRtcActive by viewModel.isViewerWebRtcActive.collectAsState()
@@ -154,9 +154,10 @@ fun ViewerModeScreen(
                     }
                 }
             } else if (isViewerWebRtcActive && webRtcSession != null) {
+                val session = webRtcSession!!
                 WebRtcVideoPlayer(
                     videoTrack = webRtcVideoTrack,
-                    eglBase = webRtcSession.eglBase,
+                    eglBase = session.eglBase,
                     modifier = Modifier.fillMaxSize()
                 )
             } else if (latestFrame != null) {
