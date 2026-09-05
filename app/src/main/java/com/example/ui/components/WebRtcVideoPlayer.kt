@@ -98,8 +98,8 @@ fun WebRtcVideoPlayer(
                         init(eglBase.eglBaseContext, null)
                         setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
                         setMirror(isMirror)
-                        setEnableHardwareScaler(false)
-                        setZOrderMediaOverlay(false)
+                        setEnableHardwareScaler(true)
+                        setZOrderMediaOverlay(true)
                     } catch (e: Exception) {
                         Log.e("WebRtcVideoPlayer", "Init error: ${e.message}")
                     }

@@ -488,6 +488,10 @@ class WebRtcSessionManager(
         Log.d(TAG, "Opening camera hardware and mic on-demand...")
 
         try {
+            try {
+                androidx.camera.lifecycle.ProcessCameraProvider.getInstance(context).get().unbindAll()
+            } catch (_: Exception) {}
+
             if (surfaceTextureHelper == null) {
                 surfaceTextureHelper = SurfaceTextureHelper.create("WebRtcCaptureThread", rootEglBase.eglBaseContext)
             }
