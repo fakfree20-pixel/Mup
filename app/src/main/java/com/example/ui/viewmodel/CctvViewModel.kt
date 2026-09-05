@@ -55,7 +55,11 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         var batteryMonitorInstance: com.example.camera.BatteryMonitor? = null
         var backgroundLifecycleOwnerInstance: AlwaysActiveLifecycleOwner? = null
         var cachedMediaProjectionData: Intent? = null
-        val backgroundScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
+        
+        private val exceptionHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, exception ->
+            android.util.Log.e("CctvViewModel", "Unhandled background coroutine exception", exception)
+        }
+        val backgroundScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob() + exceptionHandler)
     }
 
     private val TAG = "CctvViewModel"
@@ -408,53 +412,57 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
 
         // 4. Start WebRTC Session for Mobile Data / Cellular P2P low latency
         backgroundScope.launch {
-            cameraWebRtcSession = WebRtcSessionManager(
-                context = getApplication(),
-                isCameraMode = true
-            ).apply {
-                onCommandReceived = { action ->
-                    handleRemoteCommand(action, lifecycleOwner, previewView)
-                }
-                onViewerConnected = {
-                    _connectedViewersCount.value = 1
-                    broadcastCurrentTelemetry()
-                    if (_isAutoBlackoutEnabled.value) {
-                        _isPowerSaverActive.value = true
+            try {
+                cameraWebRtcSession = WebRtcSessionManager(
+                    context = getApplication(),
+                    isCameraMode = true
+                ).apply {
+                    onCommandReceived = { action ->
+                        handleRemoteCommand(action, lifecycleOwner, previewView)
                     }
-                }
-                onViewerDisconnected = {
-                    _connectedViewersCount.value = 0
-                    broadcastCurrentTelemetry()
-                }
-                startSession(
-                    scope = backgroundScope,
-                    roomId = _cameraRoomPin.value,
-                    isFrontCamera = (cameraManager.currentLens == CameraLens.FRONT)
-                )
-                cachedMediaProjectionData?.let { data ->
-                    startScreenCapture(data)
-                }
-            }
-
-            cameraWebRtcSession?.connectionState?.collect { state ->
-                when (state) {
-                    WebRtcConnectionState.CONNECTED -> {
+                    onViewerConnected = {
                         _connectedViewersCount.value = 1
                         broadcastCurrentTelemetry()
                         if (_isAutoBlackoutEnabled.value) {
                             _isPowerSaverActive.value = true
                         }
                     }
-                    WebRtcConnectionState.WAITING_PEER,
-                    WebRtcConnectionState.DISCONNECTED,
-                    WebRtcConnectionState.FAILED -> {
-                        if (cameraWebRtcSession?.isCameraActive != true) {
-                            _connectedViewersCount.value = 0
-                            broadcastCurrentTelemetry()
-                        }
+                    onViewerDisconnected = {
+                        _connectedViewersCount.value = 0
+                        broadcastCurrentTelemetry()
                     }
-                    else -> {}
+                    startSession(
+                        scope = backgroundScope,
+                        roomId = _cameraRoomPin.value,
+                        isFrontCamera = (cameraManager.currentLens == CameraLens.FRONT)
+                    )
+                    cachedMediaProjectionData?.let { data ->
+                        startScreenCapture(data)
+                    }
                 }
+
+                cameraWebRtcSession?.connectionState?.collect { state ->
+                    when (state) {
+                        WebRtcConnectionState.CONNECTED -> {
+                            _connectedViewersCount.value = 1
+                            broadcastCurrentTelemetry()
+                            if (_isAutoBlackoutEnabled.value) {
+                                _isPowerSaverActive.value = true
+                            }
+                        }
+                        WebRtcConnectionState.WAITING_PEER,
+                        WebRtcConnectionState.DISCONNECTED,
+                        WebRtcConnectionState.FAILED -> {
+                            if (cameraWebRtcSession?.isCameraActive != true) {
+                                _connectedViewersCount.value = 0
+                                broadcastCurrentTelemetry()
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("CctvViewModel", "Device does not support WebRTC hardware encoding", e)
             }
         }
 
@@ -776,59 +784,65 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             } catch (_: Exception) {}
             delay(150)
 
-            val session = WebRtcSessionManager(
-                context = getApplication(),
-                isCameraMode = false
-            ).apply {
-                onCommandReceived = { cmd ->
-                    handleViewerIncomingMessage(cmd)
+            try {
+                val session = WebRtcSessionManager(
+                    context = getApplication(),
+                    isCameraMode = false
+                ).apply {
+                    onCommandReceived = { cmd ->
+                        handleViewerIncomingMessage(cmd)
+                    }
+                    startSession(
+                        scope = backgroundScope,
+                        roomId = cleanPin
+                    )
                 }
-                startSession(
-                    scope = backgroundScope,
-                    roomId = cleanPin
-                )
-            }
-            _viewerWebRtcSession.value = session
-            
-            launch {
-                session.statusText.collect { status ->
-                    _webRtcStatus.value = status
+                _viewerWebRtcSession.value = session
+                
+                launch {
+                    session.statusText.collect { status ->
+                        _webRtcStatus.value = status
+                    }
                 }
-            }
-            
-            launch {
-                session.connectionState.collect { state ->
-                    _viewerConnectionState.value = state
-                    when (state) {
-                        WebRtcConnectionState.CONNECTED -> {
-                            showToast("✅ Live CCTV Connected!")
+                
+                launch {
+                    session.connectionState.collect { state ->
+                        _viewerConnectionState.value = state
+                        when (state) {
+                            WebRtcConnectionState.CONNECTED -> {
+                                showToast("✅ Live CCTV Connected!")
+                                session.sendCommand("GET_TELEMETRY")
+                            }
+                            WebRtcConnectionState.CONNECTING_P2P -> {
+                                _webRtcStatus.value = "Connecting live stream..."
+                            }
+                            WebRtcConnectionState.FAILED -> {
+                                _webRtcStatus.value = "Reconnecting..."
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                
+                launch {
+                    session.remoteVideoTrack.collect { track ->
+                        _viewerRemoteVideoTrack.value = track
+                    }
+                }
+                
+                // Viewer telemetry poll loop
+                launch {
+                    while (isActive && _isViewerWebRtcActive.value) {
+                        if (session.connectionState.value == WebRtcConnectionState.CONNECTED) {
                             session.sendCommand("GET_TELEMETRY")
                         }
-                        WebRtcConnectionState.CONNECTING_P2P -> {
-                            _webRtcStatus.value = "Connecting live stream..."
-                        }
-                        WebRtcConnectionState.FAILED -> {
-                            _webRtcStatus.value = "Reconnecting..."
-                        }
-                        else -> {}
+                        delay(3000)
                     }
                 }
-            }
-            
-            launch {
-                session.remoteVideoTrack.collect { track ->
-                    _viewerRemoteVideoTrack.value = track
-                }
-            }
-            
-            // Viewer telemetry poll loop
-            launch {
-                while (isActive && _isViewerWebRtcActive.value) {
-                    if (session.connectionState.value == WebRtcConnectionState.CONNECTED) {
-                        session.sendCommand("GET_TELEMETRY")
-                    }
-                    delay(3000)
-                }
+            } catch (e: Exception) {
+                android.util.Log.e("CctvViewModel", "Device does not support WebRTC", e)
+                showToast("This device does not support WebRTC.")
+                _webRtcStatus.value = "Not Supported"
             }
         }
 

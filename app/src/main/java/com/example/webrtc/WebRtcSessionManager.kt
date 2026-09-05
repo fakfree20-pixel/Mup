@@ -26,8 +26,15 @@ class WebRtcSessionManager(
     private val TAG = "WebRtcSessionManager"
 
     // Root EGL Base for OpenGL hardware video textures
-    val rootEglBase: EglBase = EglBase.create()
-    val eglBase: EglBase get() = rootEglBase
+    val rootEglBase: EglBase? by lazy {
+        try {
+            EglBase.create()
+        } catch (e: Exception) {
+            android.util.Log.e("WebRtcSessionManager", "EglBase creation failed", e)
+            null
+        }
+    }
+    val eglBase: EglBase? get() = rootEglBase
 
     private var peerConnectionFactory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
@@ -183,11 +190,11 @@ class WebRtcSessionManager(
         }
 
         val encoderFactory = DefaultVideoEncoderFactory(
-            rootEglBase.eglBaseContext,
+            rootEglBase?.eglBaseContext,
             false, // enableIntelVp8Encoder
             false  // enableH264HighProfile
         )
-        val decoderFactory = DefaultVideoDecoderFactory(rootEglBase.eglBaseContext)
+        val decoderFactory = DefaultVideoDecoderFactory(rootEglBase?.eglBaseContext)
 
         val isAecSupported = JavaAudioDeviceModule.isBuiltInAcousticEchoCancelerSupported()
         val isNsSupported = JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported()
@@ -495,7 +502,7 @@ class WebRtcSessionManager(
             } catch (_: Exception) {}
 
             if (surfaceTextureHelper == null) {
-                surfaceTextureHelper = SurfaceTextureHelper.create("WebRtcCaptureThread", rootEglBase.eglBaseContext)
+                surfaceTextureHelper = SurfaceTextureHelper.create("WebRtcCaptureThread", rootEglBase?.eglBaseContext)
             }
             if (localVideoSource == null) {
                 localVideoSource = factory.createVideoSource(false)
@@ -505,7 +512,14 @@ class WebRtcSessionManager(
                 videoCapturer = createCameraCapturer(isFrontCamera)
                 videoCapturer?.let { capturer ->
                     capturer.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
-                    capturer.startCapture(1280, 720, 30)
+                    // Delay capturing to ensure CameraX fully unbinds hardware first
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        try {
+                            capturer.startCapture(1280, 720, 30)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to start camera capture", e)
+                        }
+                    }, 800)
                 }
             }
 
@@ -595,7 +609,7 @@ class WebRtcSessionManager(
         val factory = peerConnectionFactory ?: return
         try {
             if (localVideoTrack == null) {
-                surfaceTextureHelper = SurfaceTextureHelper.create("WebRtcScreenCaptureThread", rootEglBase.eglBaseContext)
+                surfaceTextureHelper = SurfaceTextureHelper.create("WebRtcScreenCaptureThread", rootEglBase?.eglBaseContext)
                 localVideoSource = factory.createVideoSource(true)
 
                 videoCapturer = ScreenCapturerAndroid(mediaProjectionData, object : android.media.projection.MediaProjection.Callback() {
@@ -1007,7 +1021,7 @@ class WebRtcSessionManager(
                 peerConnectionFactory?.dispose()
                 peerConnectionFactory = null
 
-                rootEglBase.release()
+                rootEglBase?.release()
             } catch (e: Exception) {
                 Log.w(TAG, "Error releasing WebRTC resources", e)
             }

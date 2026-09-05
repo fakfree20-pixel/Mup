@@ -126,20 +126,25 @@ class CctvForegroundService : Service() {
 
         val notification = buildNotification(roomPin, camId)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-            }
-            try {
-                startForeground(NOTIFICATION_ID, notification, serviceType)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed startForeground with camera type, falling back: ${e.message}")
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                }
+                try {
+                    startForeground(NOTIFICATION_ID, notification, serviceType)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed startForeground with camera type, falling back: ${e.message}")
+                    startForeground(NOTIFICATION_ID, notification)
+                }
+            } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        } catch (fatalException: Exception) {
+            Log.e(TAG, "Fatal error starting foreground service. Stopping self.", fatalException)
+            stopSelf()
         }
 
         return START_STICKY
@@ -211,11 +216,11 @@ class CctvForegroundService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("🔴 CCTV Camera Active 24/7")
             .setContentText("Room PIN: $roomPin • Background Ready")
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setSmallIcon(com.example.R.drawable.ic_launcher_foreground)
             .setOngoing(true)
             .setContentIntent(openAppPendingIntent)
-            .addAction(android.R.drawable.ic_menu_view, "Open App", openAppPendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop Stream", stopPendingIntent)
+            .addAction(0, "Open App", openAppPendingIntent)
+            .addAction(0, "Stop Stream", stopPendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()

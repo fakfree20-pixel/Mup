@@ -20,7 +20,7 @@ import org.webrtc.VideoTrack
 @Composable
 fun WebRtcVideoPlayer(
     videoTrack: VideoTrack?,
-    eglBase: EglBase,
+    eglBase: EglBase?,
     modifier: Modifier = Modifier,
     isMirror: Boolean = false
 ) {
@@ -95,7 +95,7 @@ fun WebRtcVideoPlayer(
             factory = { context ->
                 SurfaceViewRenderer(context).apply {
                     try {
-                        init(eglBase.eglBaseContext, null)
+                        init(eglBase?.eglBaseContext, null)
                         setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
                         setMirror(isMirror)
                         setEnableHardwareScaler(true)
