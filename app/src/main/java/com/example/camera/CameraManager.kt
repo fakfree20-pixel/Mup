@@ -361,7 +361,6 @@ class CameraManager(private val context: Context) {
 
     fun release() {
         try {
-            cameraExecutor.shutdown()
             cameraProvider?.unbindAll()
         } catch (e: Exception) {
             Log.e(TAG, "Error releasing CameraManager", e)

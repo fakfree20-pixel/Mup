@@ -20,6 +20,7 @@ import com.example.webrtc.WebRtcSessionManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * Foreground Service that keeps CCTV video streaming, WebRTC, audio recording,
@@ -104,20 +105,22 @@ class CctvForegroundService : Service() {
 
         // Ensure WebRTC Session is active and listening
         if (CctvViewModel.cameraWebRtcSessionInstance == null && roomPin.isNotBlank()) {
-            try {
-                val session = WebRtcSessionManager(
-                    context = applicationContext,
-                    isCameraMode = true
-                ).apply {
-                    startSession(
-                        scope = CctvViewModel.backgroundScope,
-                        roomId = roomPin,
-                        isFrontCamera = false
-                    )
+            CctvViewModel.backgroundScope.launch {
+                try {
+                    val session = WebRtcSessionManager(
+                        context = applicationContext,
+                        isCameraMode = true
+                    ).apply {
+                        startSession(
+                            scope = CctvViewModel.backgroundScope,
+                            roomId = roomPin,
+                            isFrontCamera = false
+                        )
+                    }
+                    CctvViewModel.cameraWebRtcSessionInstance = session
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to init background WebRtcSessionManager", e)
                 }
-                CctvViewModel.cameraWebRtcSessionInstance = session
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to init background WebRtcSessionManager", e)
             }
         }
 
