@@ -408,12 +408,14 @@ class WebRtcSessionManager(
                 val track = transceiver.receiver.track()
                 if (track is VideoTrack) {
                     Log.d(TAG, "onTrack: Received remote VideoTrack")
+                    track.setEnabled(true)
                     _remoteVideoTrack.value = track
                 } else if (track is AudioTrack) {
                     Log.d(TAG, "onTrack: Received remote AudioTrack")
                     try {
                         track.setEnabled(true)
                         track.setVolume(1.0)
+                        configureAudioManager()
                     } catch (e: Exception) {
                         Log.w(TAG, "Error setting volume on remote audio track: ${e.message}")
                     }
@@ -764,6 +766,7 @@ class WebRtcSessionManager(
 
                 // Start physical camera and mic on-demand when viewer connects
                 startCameraHardware(currentIsFrontCamera)
+                try { Thread.sleep(600) } catch (_: Exception) {}
 
                 try {
                     dataChannel?.close()
@@ -967,11 +970,13 @@ class WebRtcSessionManager(
     }
 
     fun release() {
+        try {
+            signalingClient?.stop()
+            signalingClient = null
+        } catch (_: Exception) {}
+
         executor.submit {
             try {
-                signalingClient?.stop()
-                signalingClient = null
-
                 videoCapturer?.stopCapture()
                 videoCapturer?.dispose()
                 videoCapturer = null

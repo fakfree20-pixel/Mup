@@ -382,6 +382,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- CAMERA MODE CONTROLS ---
     fun startCameraMode(lifecycleOwner: LifecycleOwner, previewView: PreviewView? = null) {
+        stopCameraMode()
         _cameraIp.value = CctvHttpServer.getLocalIpAddress()
         batteryMonitor?.start()
 
@@ -764,6 +765,11 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         disconnectViewer()
+        try {
+            _viewerWebRtcSession.value?.release()
+            _viewerWebRtcSession.value = null
+        } catch (_: Exception) {}
+        try { Thread.sleep(150) } catch (_: Exception) {}
 
         _isViewerWebRtcActive.value = true
         _webRtcStatus.value = "Connecting to Room $cleanPin on 4G/5G..."
