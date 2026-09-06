@@ -143,13 +143,23 @@ class WebRtcSessionManager(
         configureAudioManager()
     }
 
+    private var currentSpeakerphoneState = true
+
     fun setSpeakerphoneEnabled(isEnabled: Boolean) {
+        if (isCameraMode) return // Camera mode ALWAYS stays on speaker
+        currentSpeakerphoneState = isEnabled
         try {
             val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             am?.let {
-                it.mode = AudioManager.MODE_IN_COMMUNICATION
-                it.isSpeakerphoneOn = isEnabled
-                it.setSpeakerphoneOn(isEnabled)
+                if (isEnabled) {
+                    it.mode = AudioManager.MODE_NORMAL
+                    it.isSpeakerphoneOn = true
+                    it.setSpeakerphoneOn(true)
+                } else {
+                    it.mode = AudioManager.MODE_IN_COMMUNICATION
+                    it.isSpeakerphoneOn = false
+                    it.setSpeakerphoneOn(false)
+                }
                 Log.d(TAG, "Speakerphone set to $isEnabled")
             }
         } catch (e: Exception) {
@@ -161,16 +171,15 @@ class WebRtcSessionManager(
         try {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             audioManager?.let { am ->
+                val useSpeaker = if (isCameraMode) true else currentSpeakerphoneState
+                
                 am.mode = AudioManager.MODE_IN_COMMUNICATION
-                am.isSpeakerphoneOn = true
-                am.setSpeakerphoneOn(true)
+                am.isSpeakerphoneOn = useSpeaker
+                am.setSpeakerphoneOn(useSpeaker)
+                
                 try {
                     val maxVoice = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
                     am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, maxVoice, 0)
-                } catch (_: Exception) {}
-                try {
-                    val maxMusic = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                    am.setStreamVolume(AudioManager.STREAM_MUSIC, maxMusic, 0)
                 } catch (_: Exception) {}
             }
         } catch (e: Exception) {
@@ -298,6 +307,11 @@ class WebRtcSessionManager(
                 } else if (state == WebRtcConnectionState.CONNECTED || state == WebRtcConnectionState.EXCHANGING_SDP) {
                     // Reset retry count once connection establishes or exchanges sdp
                     retryCount = 0
+                }
+                
+                // Audio Watchdog: Continuously enforce audio routing to prevent OS/WebRTC from reverting to earpiece
+                if (state == WebRtcConnectionState.CONNECTED) {
+                    configureAudioManager()
                 }
             }
         }
@@ -512,14 +526,7 @@ class WebRtcSessionManager(
                 videoCapturer = createCameraCapturer(isFrontCamera)
                 videoCapturer?.let { capturer ->
                     capturer.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
-                    // Delay capturing to ensure CameraX fully unbinds hardware first
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        try {
-                            capturer.startCapture(1280, 720, 30)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to start camera capture", e)
-                        }
-                    }, 800)
+                    capturer.startCapture(1280, 720, 30)
                 }
             }
 

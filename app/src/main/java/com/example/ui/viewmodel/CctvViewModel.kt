@@ -401,9 +401,8 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             Log.w(TAG, "Could not start CctvForegroundService: ${e.message}")
         }
 
-        val activeOwner = backgroundLifecycleOwner ?: AlwaysActiveLifecycleOwner().also {
-            backgroundLifecycleOwner = it
-        }
+        val activeOwner = lifecycleOwner // replaced
+            
 
         // 1. Setup CameraX for local display & torch support
         cameraManager.startCamera(activeOwner, previewView) {
@@ -988,9 +987,6 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             val newState = !_isViewerMicTalking.value
             _isViewerMicTalking.value = newState
             viewerWebRtcSession?.enableViewerTwoWayAudio(newState)
-            if (newState) {
-                sendRemoteCommand("SET_SPEAKERPHONE:1")
-            }
             showToast(if (newState) "🗣️ WebRTC 2-Way Audio ON" else "🔇 WebRTC 2-Way Audio OFF")
         } else {
             cctvClient.toggleTwoWayTalk(viewModelScope)
@@ -1013,11 +1009,9 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         val newState = !_isSpeakerphoneOn.value
         _isSpeakerphoneOn.value = newState
         
-        // Apply locally to Viewer
+        // Apply locally to Viewer only. 
+        // Do NOT send to Camera, because Camera must ALWAYS remain on Loudspeaker!
         viewerWebRtcSession?.setSpeakerphoneEnabled(newState)
-        
-        // Also send command to Camera so both sides toggle
-        sendRemoteCommand("SET_SPEAKERPHONE:${if (newState) "1" else "0"}")
         
         showToast(if (newState) "🔊 Speakerphone ON" else "🔈 Speakerphone OFF")
     }
