@@ -29,7 +29,7 @@ class WebRtcSessionManager(
     val rootEglBase: EglBase? by lazy {
         try {
             EglBase.create()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e("WebRtcSessionManager", "EglBase creation failed", e)
             null
         }
@@ -189,20 +189,29 @@ class WebRtcSessionManager(
     private fun initializePeerConnectionFactory() {
         synchronized(WebRtcSessionManager::class.java) {
             if (!isWebRtcInitialized) {
-                val options = PeerConnectionFactory.InitializationOptions.builder(context.applicationContext)
-                    .setEnableInternalTracer(false)
-                    .createInitializationOptions()
-                PeerConnectionFactory.initialize(options)
-                isWebRtcInitialized = true
+                try {
+                    val options = PeerConnectionFactory.InitializationOptions.builder(context.applicationContext)
+                        .setEnableInternalTracer(false)
+                        .createInitializationOptions()
+                    PeerConnectionFactory.initialize(options)
+                    isWebRtcInitialized = true
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Failed to initialize PeerConnectionFactory", e)
+                }
             }
         }
 
-        val encoderFactory = DefaultVideoEncoderFactory(
-            rootEglBase?.eglBaseContext,
-            false, // enableIntelVp8Encoder
-            false  // enableH264HighProfile
-        )
-        val decoderFactory = DefaultVideoDecoderFactory(rootEglBase?.eglBaseContext)
+        val encoderFactory = try {
+            DefaultVideoEncoderFactory(rootEglBase?.eglBaseContext, false, false)
+        } catch (e: Throwable) {
+            org.webrtc.SoftwareVideoEncoderFactory()
+        }
+        
+        val decoderFactory = try {
+            DefaultVideoDecoderFactory(rootEglBase?.eglBaseContext)
+        } catch (e: Throwable) {
+            org.webrtc.SoftwareVideoDecoderFactory()
+        }
 
         val isAecSupported = JavaAudioDeviceModule.isBuiltInAcousticEchoCancelerSupported()
         val isNsSupported = JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported()
@@ -212,18 +221,28 @@ class WebRtcSessionManager(
             .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
 
-        audioDeviceModule = JavaAudioDeviceModule.builder(context)
-            .setAudioAttributes(audioAttributes)
-            .setUseHardwareAcousticEchoCanceler(isAecSupported)
-            .setUseHardwareNoiseSuppressor(isNsSupported)
-            .createAudioDeviceModule()
+        try {
+            audioDeviceModule = JavaAudioDeviceModule.builder(context)
+                .setAudioAttributes(audioAttributes)
+                .setUseHardwareAcousticEchoCanceler(isAecSupported)
+                .setUseHardwareNoiseSuppressor(isNsSupported)
+                .createAudioDeviceModule()
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to create JavaAudioDeviceModule", e)
+        }
 
-        peerConnectionFactory = PeerConnectionFactory.builder()
-            .setAudioDeviceModule(audioDeviceModule)
-            .setVideoEncoderFactory(encoderFactory)
-            .setVideoDecoderFactory(decoderFactory)
-            .setOptions(PeerConnectionFactory.Options())
-            .createPeerConnectionFactory()
+        try {
+            val builder = PeerConnectionFactory.builder()
+                .setVideoEncoderFactory(encoderFactory)
+                .setVideoDecoderFactory(decoderFactory)
+                .setOptions(PeerConnectionFactory.Options())
+            
+            audioDeviceModule?.let { builder.setAudioDeviceModule(it) }
+            
+            peerConnectionFactory = builder.createPeerConnectionFactory()
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to create PeerConnectionFactory", e)
+        }
     }
 
     fun startSession(
@@ -674,21 +693,31 @@ class WebRtcSessionManager(
     }
 
     private fun createCameraCapturer(isFront: Boolean): VideoCapturer? {
-        val enumerator = Camera2Enumerator(context)
-        val deviceNames = enumerator.deviceNames
-
-        for (name in deviceNames) {
-            if (isFront && enumerator.isFrontFacing(name)) {
-                return enumerator.createCapturer(name, null)
+        val enumerators = listOf(
+            org.webrtc.Camera2Enumerator(context),
+            org.webrtc.Camera1Enumerator(false)
+        )
+        
+        for (enumerator in enumerators) {
+            try {
+                val deviceNames = enumerator.deviceNames
+                for (name in deviceNames) {
+                    if (isFront && enumerator.isFrontFacing(name)) {
+                        val capturer = enumerator.createCapturer(name, null)
+                        if (capturer != null) return capturer
+                    }
+                    if (!isFront && enumerator.isBackFacing(name)) {
+                        val capturer = enumerator.createCapturer(name, null)
+                        if (capturer != null) return capturer
+                    }
+                }
+                for (name in deviceNames) {
+                    val capturer = enumerator.createCapturer(name, null)
+                    if (capturer != null) return capturer
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "Enumerator failed: ${enumerator.javaClass.simpleName}", e)
             }
-            if (!isFront && enumerator.isBackFacing(name)) {
-                return enumerator.createCapturer(name, null)
-            }
-        }
-
-        for (name in deviceNames) {
-            val capturer = enumerator.createCapturer(name, null)
-            if (capturer != null) return capturer
         }
         return null
     }

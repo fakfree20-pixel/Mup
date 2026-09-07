@@ -106,7 +106,7 @@ class CctvForegroundService : Service() {
         val notification = buildNotification(roomPin, camId)
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
