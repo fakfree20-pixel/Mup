@@ -424,9 +424,11 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             
 
         // 1. Setup CameraX for local display & torch support
-        cameraManager.startCamera(activeOwner, previewView) {
-            _isCameraStreaming.value = true
-        }
+        // TEMPORARILY DISABLED to prevent native SIGSEGV crash when WebRTC also tries to open the camera.
+        // cameraManager.startCamera(activeOwner, previewView) {
+        //     _isCameraStreaming.value = true
+        // }
+        _isCameraStreaming.value = true
 
         // 4. Start WebRTC Session for Mobile Data / Cellular P2P low latency
         backgroundScope.launch {
@@ -479,7 +481,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                         else -> {}
                     }
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 android.util.Log.e("CctvViewModel", "Device does not support WebRTC hardware encoding", e)
             }
         }
@@ -718,7 +720,19 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleCameraTorch() {
-        cameraManager.toggleTorch()
+        if (cameraManagerInstance?.isTorchOn == true || !cameraManager.toggleTorch()) {
+            // Fallback if CameraX is disabled
+            try {
+                val cm = getApplication<Application>().getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+                val cameraId = cm.cameraIdList[0]
+                val newTorchState = !(_cameraTelemetry.value.isTorchOn)
+                cm.setTorchMode(cameraId, newTorchState)
+                // We update telemetry manually since CameraX isn't doing it
+                cameraManagerInstance?.setTorch(newTorchState) // just for state
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to toggle torch via system service", e)
+            }
+        }
     }
 
     fun toggleMotionDetection(): Boolean {

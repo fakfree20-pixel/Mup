@@ -565,7 +565,7 @@ class WebRtcSessionManager(
             
             isCameraHardwareActive = true
             Log.d(TAG, "Camera hardware and microphone opened successfully")
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e(TAG, "Error starting camera hardware", e)
         }
     }

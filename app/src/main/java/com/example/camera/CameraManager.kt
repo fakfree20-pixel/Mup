@@ -320,8 +320,8 @@ class CameraManager(private val context: Context) {
     }
 
     fun setTorch(enabled: Boolean) {
+        isTorchOn = enabled
         if (currentLens == CameraLens.BACK && cameraInfo?.hasFlashUnit() == true) {
-            isTorchOn = enabled
             cameraControl?.enableTorch(enabled)
         }
     }
