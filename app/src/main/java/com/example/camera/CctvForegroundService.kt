@@ -49,7 +49,14 @@ class CctvForegroundService : Service() {
                 putExtra(EXTRA_CAM_ID, camId)
             }
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    try {
+                        context.startForegroundService(intent)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Foreground service start not allowed from background, falling back to startService: ${e.message}")
+                        context.startService(intent)
+                    }
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)
                 } else {
                     context.startService(intent)
