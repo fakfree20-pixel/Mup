@@ -465,6 +465,8 @@ class WebRtcSessionManager(
         }
     }
 
+    var onAudioDataReceived: ((ByteArray) -> Unit)? = null
+
     private fun setupDataChannelListeners(dc: DataChannel) {
         dc.registerObserver(object : DataChannel.Observer {
             override fun onBufferedAmountChange(previousAmount: Long) {}
@@ -475,11 +477,38 @@ class WebRtcSessionManager(
             override fun onMessage(buffer: DataChannel.Buffer) {
                 val data = ByteArray(buffer.data.remaining())
                 buffer.data.get(data)
-                val cmd = String(data, Charsets.UTF_8)
-                Log.d(TAG, "DataChannel message received: $cmd")
-                onCommandReceived?.invoke(cmd)
+                
+                if (buffer.binary) {
+                    onAudioDataReceived?.invoke(data)
+                } else {
+                    val cmd = String(data, Charsets.UTF_8)
+                    Log.d(TAG, "DataChannel message received: $cmd")
+                    
+                    if (isCameraMode && (cmd == "VIEWER_DISCONNECT" || cmd == "STOP_STREAM")) {
+                        Log.d(TAG, "Received VIEWER_DISCONNECT command via DataChannel, stopping camera hardware")
+                        executor.submit { stopCameraHardware() }
+                    } else if (isCameraMode && cmd.startsWith("SET_SPEAKERPHONE:")) {
+                        val isOn = cmd.substringAfter("SET_SPEAKERPHONE:").trim() == "1"
+                        setSpeakerphoneEnabled(isOn)
+                    }
+                    
+                    onCommandReceived?.invoke(cmd)
+                }
             }
         })
+    }
+    
+    fun sendAudioData(pcm: ByteArray) {
+        try {
+            dataChannel?.let { dc ->
+                if (dc.state() == DataChannel.State.OPEN) {
+                    val buffer = DataChannel.Buffer(java.nio.ByteBuffer.wrap(pcm), true)
+                    dc.send(buffer)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send audio via DataChannel", e)
+        }
     }
 
     private fun setupViewerMediaTracks() {
@@ -510,14 +539,6 @@ class WebRtcSessionManager(
         Log.d(TAG, "Opening camera hardware and mic on-demand...")
 
         try {
-            try {
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    try {
-                        androidx.camera.lifecycle.ProcessCameraProvider.getInstance(context).get().unbindAll()
-                    } catch (_: Exception) {}
-                }
-            } catch (_: Exception) {}
-
             if (surfaceTextureHelper == null) {
                 surfaceTextureHelper = SurfaceTextureHelper.create("WebRtcCaptureThread", rootEglBase?.eglBaseContext)
             }
@@ -538,25 +559,10 @@ class WebRtcSessionManager(
                 localVideoTrack?.setEnabled(true)
             }
 
-            if (localAudioSource == null) {
-                val audioConstraints = MediaConstraints().apply {
-                    mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation2", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl2", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression2", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googTypingNoiseDetection", "true"))
-                }
-                localAudioSource = factory.createAudioSource(audioConstraints)
-            }
-
-            if (localAudioTrack == null) {
-                localAudioTrack = factory.createAudioTrack("CCTV_AUDIO_TRACK", localAudioSource)
-                localAudioTrack?.setEnabled(true)
-            }
-
+            // NOTE: We do NOT create localAudioSource or localAudioTrack here anymore.
+            // The camera's microphone is captured by AudioStreamManager (with VoiceIsolationDsp)
+            // and the raw PCM bytes are sent over the DataChannel to the viewer.
+            
             isCameraHardwareActive = true
             Log.d(TAG, "Camera hardware and microphone opened successfully")
         } catch (e: Exception) {
@@ -639,22 +645,9 @@ class WebRtcSessionManager(
                 peerConnection?.addTrack(localVideoTrack, listOf("cctv_stream"))
             }
 
-            if (localAudioTrack == null) {
-                val audioConstraints = MediaConstraints().apply {
-                    mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation2", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl2", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression2", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googTypingNoiseDetection", "true"))
-                }
-                localAudioSource = factory.createAudioSource(audioConstraints)
-                localAudioTrack = factory.createAudioTrack("CCTV_AUDIO_TRACK", localAudioSource)
-                localAudioTrack?.setEnabled(true)
-                peerConnection?.addTrack(localAudioTrack, listOf("cctv_stream"))
-            }
+            // NOTE: We do NOT create localAudioSource or localAudioTrack here anymore.
+            // The camera's microphone is captured by AudioStreamManager (with VoiceIsolationDsp)
+            // and the raw PCM bytes are sent over the DataChannel to the viewer.
         } catch (e: Exception) {
             Log.e(TAG, "Error starting screen capture", e)
         }

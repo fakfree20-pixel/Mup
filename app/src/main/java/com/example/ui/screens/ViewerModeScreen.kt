@@ -84,9 +84,24 @@ fun ViewerModeScreen(
     androidx.activity.compose.BackHandler(enabled = isAnyConnected || isAttemptingConnection) {
         viewModel.disconnectViewer()
     }
-
-    DisposableEffect(Unit) {
+    
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_START) {
+                if (viewModel.savedCameras.value.isNotEmpty() && !viewModel.isViewerWebRtcActive.value) {
+                    val mostRecent = viewModel.savedCameras.value.first()
+                    viewModel.setViewerRoomPinInput(mostRecent.cameraId)
+                    viewModel.connectToCamera(mostRecent.cameraId)
+                }
+            } else if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                // When viewer app is put into background (home button pressed), disconnect so old phone turns off
+                viewModel.disconnectViewer()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.disconnectViewer()
         }
     }

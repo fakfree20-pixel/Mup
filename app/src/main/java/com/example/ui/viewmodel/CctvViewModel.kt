@@ -401,7 +401,10 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             Log.w(TAG, "Could not start CctvForegroundService: ${e.message}")
         }
 
-        val activeOwner = lifecycleOwner // replaced
+        if (backgroundLifecycleOwner == null) {
+            backgroundLifecycleOwner = AlwaysActiveLifecycleOwner()
+        }
+        val activeOwner = backgroundLifecycleOwner!!
             
 
         // 1. Setup CameraX for local display & torch support
@@ -518,10 +521,16 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             httpServer?.broadcastJpegFrame(jpeg)
         }
 
-        // Connect Audio broadcast to HTTP server
+        // Connect Audio broadcast to HTTP server and WebRTC DataChannel (Filtered Audio)
         audioStreamManager.addAudioListener { pcm ->
             httpServer?.broadcastAudioPacket(pcm)
+            if (_connectedViewersCount.value > 0) {
+                cameraWebRtcSession?.sendAudioData(pcm)
+            }
         }
+        
+        // Start capturing audio immediately so VoiceIsolationDsp runs continuously
+        audioStreamManager.startMicrophoneStreaming(backgroundScope)
 
         // 6. Start UDP Beacon for instant Viewer Auto-Discovery on LAN
         discovery.startBroadcasting(
@@ -791,6 +800,9 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                     onCommandReceived = { cmd ->
                         handleViewerIncomingMessage(cmd)
                     }
+                    onAudioDataReceived = { pcm ->
+                        audioStreamManager.playSpeakerAudio(pcm)
+                    }
                     startSession(
                         scope = backgroundScope,
                         roomId = cleanPin
@@ -865,6 +877,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         _viewerRemoteVideoTrack.value = null
         _isViewerWebRtcActive.value = false
         _webRtcStatus.value = "Disconnected"
+        audioStreamManager.stopSpeakerAudio()
         backgroundScope.launch {
             try {
                 session?.sendCommand("VIEWER_DISCONNECT")
