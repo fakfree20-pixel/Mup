@@ -49,20 +49,9 @@ class CctvForegroundService : Service() {
                 putExtra(EXTRA_CAM_ID, camId)
             }
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    try {
-                        context.startForegroundService(intent)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Foreground service start not allowed from background, falling back to startService: ${e.message}")
-                        context.startService(intent)
-                    }
-                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
-                }
+                context.startService(intent)
             } catch (e: Exception) {
-                Log.e(TAG, "Error starting foreground service", e)
+                Log.e(TAG, "Error starting service", e)
             }
         }
 
@@ -73,7 +62,7 @@ class CctvForegroundService : Service() {
             try {
                 context.startService(intent)
             } catch (e: Exception) {
-                Log.e(TAG, "Error stopping foreground service", e)
+                Log.e(TAG, "Error stopping service", e)
             }
         }
     }
@@ -82,6 +71,12 @@ class CctvForegroundService : Service() {
         super.onCreate()
         createNotificationChannel()
         acquireWakeLock()
+        try {
+            val notification = buildNotification("ACTIVE", "CAM")
+            startForeground(NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting foreground in onCreate", e)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -115,8 +110,7 @@ class CctvForegroundService : Service() {
         try {
             startForeground(NOTIFICATION_ID, notification)
         } catch (fatalException: Exception) {
-            Log.e(TAG, "Fatal error starting foreground service. Stopping self.", fatalException)
-            stopSelf()
+            Log.e(TAG, "Fatal error updating foreground notification", fatalException)
         }
 
         return START_STICKY
