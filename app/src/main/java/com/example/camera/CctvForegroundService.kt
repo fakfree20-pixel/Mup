@@ -106,21 +106,7 @@ class CctvForegroundService : Service() {
         val notification = buildNotification(roomPin, camId)
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-                }
-                try {
-                    startForeground(NOTIFICATION_ID, notification, serviceType)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed startForeground with camera type, falling back: ${e.message}")
-                    startForeground(NOTIFICATION_ID, notification)
-                }
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
-            }
+            startForeground(NOTIFICATION_ID, notification)
         } catch (fatalException: Exception) {
             Log.e(TAG, "Fatal error starting foreground service. Stopping self.", fatalException)
             stopSelf()
@@ -195,7 +181,7 @@ class CctvForegroundService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("🔴 CCTV Camera Active 24/7")
             .setContentText("Room PIN: $roomPin • Background Ready")
-            .setSmallIcon(com.example.R.drawable.ic_launcher_foreground)
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setOngoing(true)
             .setContentIntent(openAppPendingIntent)
             .addAction(0, "Open App", openAppPendingIntent)
