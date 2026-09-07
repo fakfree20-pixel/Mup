@@ -103,27 +103,6 @@ class CctvForegroundService : Service() {
             .putString(BootReceiver.KEY_CAM_ID, camId)
             .apply()
 
-        // Ensure WebRTC Session is active and listening
-        if (CctvViewModel.cameraWebRtcSessionInstance == null && roomPin.isNotBlank()) {
-            CctvViewModel.backgroundScope.launch {
-                try {
-                    val session = WebRtcSessionManager(
-                        context = applicationContext,
-                        isCameraMode = true
-                    ).apply {
-                        startSession(
-                            scope = CctvViewModel.backgroundScope,
-                            roomId = roomPin,
-                            isFrontCamera = false
-                        )
-                    }
-                    CctvViewModel.cameraWebRtcSessionInstance = session
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to init background WebRtcSessionManager", e)
-                }
-            }
-        }
-
         val notification = buildNotification(roomPin, camId)
 
         try {

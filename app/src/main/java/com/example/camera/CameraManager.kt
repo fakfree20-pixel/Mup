@@ -359,6 +359,10 @@ class CameraManager(private val context: Context) {
         }
     }
 
+    fun attachPreview(previewView: PreviewView?) {
+        previewUseCase?.setSurfaceProvider(previewView?.surfaceProvider)
+    }
+
     fun release() {
         try {
             cameraProvider?.unbindAll()

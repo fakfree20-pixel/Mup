@@ -106,8 +106,9 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 registry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_START)
                 registry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_RESUME)
             } catch (e: Exception) {
-                // Fallback if handleLifecycleEvent fails
-                registry.currentState = androidx.lifecycle.Lifecycle.State.RESUMED
+                try {
+                    registry.currentState = androidx.lifecycle.Lifecycle.State.RESUMED
+                } catch (_: Exception) {}
             }
         }
 
@@ -117,7 +118,9 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 registry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_STOP)
                 registry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_DESTROY)
             } catch (e: Exception) {
-                registry.currentState = androidx.lifecycle.Lifecycle.State.DESTROYED
+                try {
+                    registry.currentState = androidx.lifecycle.Lifecycle.State.DESTROYED
+                } catch (_: Exception) {}
             }
         }
     }
@@ -751,6 +754,10 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             showToast("📸 Snapshot saved!")
         }
         return@withContext success
+    }
+
+    fun attachPreview(previewView: androidx.camera.view.PreviewView?) {
+        cameraManager.attachPreview(previewView)
     }
 
     fun stopCameraMode() {
