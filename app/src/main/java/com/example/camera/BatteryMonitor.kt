@@ -20,10 +20,14 @@ class BatteryMonitor(
 
     fun start() {
         if (!isRegistered) {
-            val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-            val stickyIntent = context.registerReceiver(receiver, filter)
-            stickyIntent?.let { updateBattery(it) }
-            isRegistered = true
+            try {
+                val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+                val stickyIntent = context.registerReceiver(receiver, filter)
+                stickyIntent?.let { updateBattery(it) }
+                isRegistered = true
+            } catch (e: Exception) {
+                // Ignore if it fails on some devices
+            }
         }
     }
 

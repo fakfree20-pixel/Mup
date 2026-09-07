@@ -101,11 +101,24 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         override val lifecycle: androidx.lifecycle.Lifecycle get() = registry
 
         init {
-            registry.currentState = androidx.lifecycle.Lifecycle.State.RESUMED
+            try {
+                registry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_CREATE)
+                registry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_START)
+                registry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_RESUME)
+            } catch (e: Exception) {
+                // Fallback if handleLifecycleEvent fails
+                registry.currentState = androidx.lifecycle.Lifecycle.State.RESUMED
+            }
         }
 
         fun destroy() {
-            registry.currentState = androidx.lifecycle.Lifecycle.State.DESTROYED
+            try {
+                registry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_PAUSE)
+                registry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_STOP)
+                registry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_DESTROY)
+            } catch (e: Exception) {
+                registry.currentState = androidx.lifecycle.Lifecycle.State.DESTROYED
+            }
         }
     }
 
@@ -506,13 +519,17 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 cameraManager.latestJpegFrame
             }
         ).apply {
-            val boundPort = start(backgroundScope)
-            _cameraPort.value = boundPort
-            onClientCountChanged = { count ->
-                _connectedViewersCount.value = count
-                if (count > 0 && _isAutoBlackoutEnabled.value) {
-                    _isPowerSaverActive.value = true
+            try {
+                val boundPort = start(backgroundScope)
+                _cameraPort.value = boundPort
+                onClientCountChanged = { count ->
+                    _connectedViewersCount.value = count
+                    if (count > 0 && _isAutoBlackoutEnabled.value) {
+                        _isPowerSaverActive.value = true
+                    }
                 }
+            } catch (e: Exception) {
+                android.util.Log.e("CctvViewModel", "Failed to start CctvHttpServer", e)
             }
         }
 
