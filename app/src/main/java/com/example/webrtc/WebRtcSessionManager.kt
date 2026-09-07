@@ -143,10 +143,9 @@ class WebRtcSessionManager(
         configureAudioManager()
     }
 
-    private var currentSpeakerphoneState = true
+    private var currentSpeakerphoneState = false
 
     fun setSpeakerphoneEnabled(isEnabled: Boolean) {
-        if (isCameraMode) return // Camera mode ALWAYS stays on speaker
         currentSpeakerphoneState = isEnabled
         try {
             val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -171,7 +170,7 @@ class WebRtcSessionManager(
         try {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             audioManager?.let { am ->
-                val useSpeaker = if (isCameraMode) true else currentSpeakerphoneState
+                val useSpeaker = currentSpeakerphoneState
                 
                 am.mode = AudioManager.MODE_IN_COMMUNICATION
                 am.isSpeakerphoneOn = useSpeaker
@@ -512,7 +511,11 @@ class WebRtcSessionManager(
 
         try {
             try {
-                androidx.camera.lifecycle.ProcessCameraProvider.getInstance(context).get().unbindAll()
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    try {
+                        androidx.camera.lifecycle.ProcessCameraProvider.getInstance(context).get().unbindAll()
+                    } catch (_: Exception) {}
+                }
             } catch (_: Exception) {}
 
             if (surfaceTextureHelper == null) {
@@ -899,6 +902,9 @@ class WebRtcSessionManager(
                     if (isCameraMode && (cmd == "VIEWER_DISCONNECT" || cmd == "STOP_STREAM")) {
                         Log.d(TAG, "Received VIEWER_DISCONNECT command, stopping camera hardware")
                         executor.submit { stopCameraHardware() }
+                    } else if (isCameraMode && cmd.startsWith("SET_SPEAKERPHONE:")) {
+                        val isOn = cmd.substringAfter("SET_SPEAKERPHONE:").trim() == "1"
+                        setSpeakerphoneEnabled(isOn)
                     }
                     onCommandReceived?.invoke(cmd)
                 }

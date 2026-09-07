@@ -987,7 +987,8 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             val newState = !_isViewerMicTalking.value
             _isViewerMicTalking.value = newState
             viewerWebRtcSession?.enableViewerTwoWayAudio(newState)
-            showToast(if (newState) "🗣️ WebRTC 2-Way Audio ON" else "🔇 WebRTC 2-Way Audio OFF")
+            sendRemoteCommand(if (newState) "SET_SPEAKERPHONE:1" else "SET_SPEAKERPHONE:0")
+            showToast(if (newState) "🗣️ Mic ON (Camera Speaker ON)" else "🔇 Mic OFF (Camera Speaker OFF)")
         } else {
             cctvClient.toggleTwoWayTalk(viewModelScope)
         }
