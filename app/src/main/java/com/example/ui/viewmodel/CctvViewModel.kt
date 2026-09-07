@@ -446,10 +446,12 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                         if (_isAutoBlackoutEnabled.value) {
                             _isPowerSaverActive.value = true
                         }
+                        audioStreamManager.startMicrophoneStreaming(backgroundScope)
                     }
                     onViewerDisconnected = {
                         _connectedViewersCount.value = 0
                         broadcastCurrentTelemetry()
+                        audioStreamManager.stopMicrophoneStreaming()
                     }
                     startSession(
                         scope = backgroundScope,
@@ -551,8 +553,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         
-        // Start capturing audio immediately so VoiceIsolationDsp runs continuously
-        audioStreamManager.startMicrophoneStreaming(backgroundScope)
+        // Microphone streaming starts on-demand when a viewer connects
 
         // 6. Start UDP Beacon for instant Viewer Auto-Discovery on LAN
         discovery.startBroadcasting(

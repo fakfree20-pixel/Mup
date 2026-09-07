@@ -271,19 +271,8 @@ class WebRtcSessionManager(
         }
 
         if (isCameraMode) {
-            _connectionState.value = WebRtcConnectionState.CONNECTING_P2P
-            _statusText.value = "Starting camera and broadcasting..."
-            startCameraHardware(isFrontCamera)
-            scope.launch(Dispatchers.IO) {
-                delay(600)
-                localVideoTrack?.let {
-                    peerConnection?.addTrack(it, listOf("cctv_stream"))
-                }
-                localAudioTrack?.let {
-                    peerConnection?.addTrack(it, listOf("cctv_stream"))
-                }
-                createAndSendOffer(roomId)
-            }
+            _connectionState.value = WebRtcConnectionState.WAITING_PEER
+            _statusText.value = "Standby (Camera & Mic Off) - Waiting for viewer..."
         } else {
             setupViewerMediaTracks()
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
