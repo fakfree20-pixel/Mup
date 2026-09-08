@@ -787,7 +787,7 @@ class WebRtcSessionManager(
     }
 
     private fun resetPeerConnectionForFreshOffer(scope: CoroutineScope, roomId: String) {
-        if (isCameraHardwareActive && peerConnection != null && _connectionState.value == WebRtcConnectionState.CONNECTED) {
+        if (isCameraHardwareActive && peerConnection != null && localVideoTrack != null && _connectionState.value == WebRtcConnectionState.CONNECTED) {
             Log.d(TAG, "Already connected and camera active, ignoring duplicate ROOM_JOINED")
             return
         }
@@ -801,7 +801,13 @@ class WebRtcSessionManager(
 
                 // Start physical camera and mic on-demand when viewer connects
                 startCameraHardware(currentIsFrontCamera)
-                try { Thread.sleep(600) } catch (_: Exception) {}
+                
+                // Wait up to 2 seconds for localVideoTrack to be ready
+                var attempts = 0
+                while (localVideoTrack == null && attempts < 20) {
+                    try { Thread.sleep(100) } catch (_: Exception) {}
+                    attempts++
+                }
 
                 try {
                     dataChannel?.close()
@@ -817,13 +823,11 @@ class WebRtcSessionManager(
 
                 setupPeerConnection(scope)
 
-                // Re-add live video and audio tracks
+                // Re-add live video track
                 localVideoTrack?.let {
+                    Log.d(TAG, "Adding localVideoTrack to peer connection for new viewer")
                     peerConnection?.addTrack(it, listOf("cctv_stream"))
-                }
-                localAudioTrack?.let {
-                    peerConnection?.addTrack(it, listOf("cctv_stream"))
-                }
+                } ?: Log.e(TAG, "ERROR: localVideoTrack is null after startCameraHardware!")
 
                 createAndSendOffer(roomId)
                 onViewerConnected?.invoke()

@@ -297,11 +297,11 @@ fun ViewerModeScreen(
                     }
                 }
                 
-                // Secondary Controls Row (Torch, Switch Camera, Audio Only)
+                // Secondary Controls Row (Torch, Switch Camera, Audio Only, Speakerphone)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 24.dp, start = 48.dp, end = 48.dp),
+                        .padding(bottom = 24.dp, start = 24.dp, end = 24.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -324,12 +324,30 @@ fun ViewerModeScreen(
                     ) {
                         Icon(Icons.Default.Cameraswitch, contentDescription = "Switch Camera", tint = Color.White, modifier = Modifier.size(24.dp))
                     }
+
+                    // Audio Only Mode Button (खाली ऑडियो सुनें)
+                    IconButton(
+                        onClick = { viewModel.toggleAudioOnlyMode() },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(
+                                if (isAudioOnlyMode) CctvSuccessGreen else Color(0x77000000),
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Hearing,
+                            contentDescription = "Audio Only Mode",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
                     
                     // Speakerphone Toggle (हैंड्स-फ्री)
                     IconButton(
                         onClick = { viewModel.toggleSpeakerphone() },
                         modifier = Modifier
-                            .size(54.dp)
+                            .size(48.dp)
                             .background(
                                 if (isSpeakerphoneOn) CctvSuccessGreen else Color(0x77000000), 
                                 CircleShape
@@ -339,7 +357,7 @@ fun ViewerModeScreen(
                             imageVector = if (isSpeakerphoneOn) Icons.Default.VolumeUp else Icons.Default.PhoneInTalk,
                             contentDescription = "Speakerphone",
                             tint = Color.White,
-                            modifier = Modifier.size(26.dp)
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                 }
