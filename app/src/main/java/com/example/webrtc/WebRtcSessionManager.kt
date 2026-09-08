@@ -244,8 +244,8 @@ class WebRtcSessionManager(
 
         if (isCameraMode) {
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
-            _statusText.value = "Camera Active - Waiting for viewer..."
-            startCameraHardware(isFrontCamera)
+            _statusText.value = "Standby (Camera & Mic Off) - Waiting for viewer..."
+            // Camera hardware remains OFF until the viewer connects
         } else {
             setupViewerMediaTracks()
             _connectionState.value = WebRtcConnectionState.WAITING_PEER

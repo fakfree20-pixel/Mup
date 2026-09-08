@@ -433,7 +433,6 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         // 4. Start WebRTC Session for Mobile Data / Cellular P2P low latency
         backgroundScope.launch {
             try {
-                audioStreamManager.startMicrophoneStreaming(backgroundScope)
                 cameraWebRtcSession = WebRtcSessionManager(
                     context = getApplication(),
                     isCameraMode = true
