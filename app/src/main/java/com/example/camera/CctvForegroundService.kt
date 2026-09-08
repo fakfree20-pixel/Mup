@@ -39,19 +39,35 @@ class CctvForegroundService : Service() {
 
         const val ACTION_START = "com.example.cctv.START_BACKGROUND_STREAM"
         const val ACTION_STOP = "com.example.cctv.STOP_BACKGROUND_STREAM"
+        const val ACTION_UPDATE_STATE = "com.example.cctv.UPDATE_STREAMING_STATE"
         const val EXTRA_ROOM_PIN = "extra_room_pin"
         const val EXTRA_CAM_ID = "extra_cam_id"
+        const val EXTRA_IS_STREAMING = "extra_is_streaming"
 
-        fun startService(context: Context, roomPin: String, camId: String) {
+        fun startService(context: Context, roomPin: String, camId: String, isStreaming: Boolean = false) {
             val intent = Intent(context, CctvForegroundService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_ROOM_PIN, roomPin)
                 putExtra(EXTRA_CAM_ID, camId)
+                putExtra(EXTRA_IS_STREAMING, isStreaming)
             }
             try {
                 context.startService(intent)
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting service", e)
+            }
+        }
+
+        fun updateStreamingState(context: Context, isStreaming: Boolean, roomPin: String) {
+            val intent = Intent(context, CctvForegroundService::class.java).apply {
+                action = ACTION_UPDATE_STATE
+                putExtra(EXTRA_IS_STREAMING, isStreaming)
+                putExtra(EXTRA_ROOM_PIN, roomPin)
+            }
+            try {
+                context.startService(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating streaming state", e)
             }
         }
 
@@ -67,13 +83,15 @@ class CctvForegroundService : Service() {
         }
     }
 
+    private var isStreamingActive = false
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         acquireWakeLock()
         try {
-            val notification = buildNotification("ACTIVE", "CAM")
-            startForegroundWithType(notification)
+            val notification = buildNotification("ACTIVE", "CAM", false)
+            startForegroundWithType(notification, false)
         } catch (e: Exception) {
             Log.e(TAG, "Error starting foreground in onCreate", e)
         }
@@ -98,6 +116,10 @@ class CctvForegroundService : Service() {
             ?: prefs.getString(BootReceiver.KEY_CAM_ID, null) 
             ?: "CAM"
 
+        if (intent?.hasExtra(EXTRA_IS_STREAMING) == true) {
+            isStreamingActive = intent.getBooleanExtra(EXTRA_IS_STREAMING, false)
+        }
+
         // Persist camera mode as active
         prefs.edit()
             .putBoolean(BootReceiver.KEY_CAMERA_MODE_ACTIVE, true)
@@ -105,10 +127,10 @@ class CctvForegroundService : Service() {
             .putString(BootReceiver.KEY_CAM_ID, camId)
             .apply()
 
-        val notification = buildNotification(roomPin, camId)
+        val notification = buildNotification(roomPin, camId, isStreamingActive)
 
         try {
-            startForegroundWithType(notification)
+            startForegroundWithType(notification, isStreamingActive)
         } catch (fatalException: Exception) {
             Log.e(TAG, "Fatal error updating foreground notification", fatalException)
         }
@@ -116,15 +138,20 @@ class CctvForegroundService : Service() {
         return START_STICKY
     }
 
-    private fun startForegroundWithType(notification: Notification) {
+    private fun startForegroundWithType(notification: Notification, isStreaming: Boolean) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
+                val serviceType = if (isStreaming) {
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or 
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or 
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                } else {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                }
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    serviceType
                 )
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
@@ -182,7 +209,7 @@ class CctvForegroundService : Service() {
         }
     }
 
-    private fun buildNotification(roomPin: String, camId: String): Notification {
+    private fun buildNotification(roomPin: String, camId: String, isStreaming: Boolean): Notification {
         val openAppIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
@@ -203,9 +230,12 @@ class CctvForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val title = if (isStreaming) "🔴 CCTV लाइव स्ट्रीम चालू" else "💤 CCTV स्टैंडबाय (Standby Ready)"
+        val text = if (isStreaming) "Room PIN: $roomPin • लाइव कैमरा और ऑडियो सक्रिय है" else "Room PIN: $roomPin • नया फोन कनेक्ट होने पर कैमरा चालू होगा"
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("🔴 CCTV Camera Active 24/7")
-            .setContentText("Room PIN: $roomPin • Background Ready")
+            .setContentTitle(title)
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setOngoing(true)
             .setContentIntent(openAppPendingIntent)

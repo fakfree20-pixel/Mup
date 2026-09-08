@@ -447,11 +447,13 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                             _isPowerSaverActive.value = true
                         }
                         audioStreamManager.startMicrophoneStreaming(backgroundScope)
+                        CctvForegroundService.updateStreamingState(getApplication(), true, _cameraRoomPin.value)
                     }
                     onViewerDisconnected = {
                         _connectedViewersCount.value = 0
                         broadcastCurrentTelemetry()
                         audioStreamManager.stopMicrophoneStreaming()
+                        CctvForegroundService.updateStreamingState(getApplication(), false, _cameraRoomPin.value)
                     }
                     startSession(
                         scope = backgroundScope,

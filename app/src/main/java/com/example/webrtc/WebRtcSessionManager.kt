@@ -109,6 +109,8 @@ class WebRtcSessionManager(
     private var isRemoteDescriptionSet = false
     @Volatile
     private var isCreatingOffer = false
+    @Volatile
+    private var isNegotiating = false
 
     init {
         initializePeerConnectionFactory()
@@ -272,11 +274,11 @@ class WebRtcSessionManager(
             }
         }
 
-        // Background watchdog: fast retry if waiting for peer
+        // Background watchdog: retry if waiting for peer
         scope.launch(Dispatchers.IO) {
             var retryCount = 0
             while (scope.isActive) {
-                delay(800)
+                delay(2000)
                 val state = _connectionState.value
                 if (state == WebRtcConnectionState.WAITING_PEER || state == WebRtcConnectionState.FAILED) {
                     retryCount++
@@ -293,7 +295,7 @@ class WebRtcSessionManager(
                         Log.d(TAG, "Watchdog: Restarting ICE on Camera...")
                         peerConnection?.restartIce()
                     }
-                } else if (state == WebRtcConnectionState.CONNECTED || state == WebRtcConnectionState.EXCHANGING_SDP) {
+                } else if (state == WebRtcConnectionState.CONNECTED || state == WebRtcConnectionState.EXCHANGING_SDP || state == WebRtcConnectionState.CONNECTING_P2P) {
                     // Reset retry count once connection establishes or exchanges sdp
                     retryCount = 0
                 }
@@ -328,6 +330,7 @@ class WebRtcSessionManager(
                     when (state) {
                         PeerConnection.IceConnectionState.CONNECTED,
                         PeerConnection.IceConnectionState.COMPLETED -> {
+                            isNegotiating = false
                             _connectionState.value = WebRtcConnectionState.CONNECTED
                             _statusText.value = "● Live Stream Connected"
                             configureAudioManager()
@@ -336,6 +339,7 @@ class WebRtcSessionManager(
                             }
                         }
                         PeerConnection.IceConnectionState.DISCONNECTED -> {
+                            isNegotiating = false
                             _connectionState.value = WebRtcConnectionState.DISCONNECTED
                             _statusText.value = "Viewer disconnected. Re-establishing..."
                             if (isCameraMode) {
@@ -344,12 +348,14 @@ class WebRtcSessionManager(
                                     if (_connectionState.value == WebRtcConnectionState.DISCONNECTED) {
                                         Log.d(TAG, "Disconnected for 4s, stopping camera hardware for standby")
                                         stopCameraHardware()
+                                        onViewerDisconnected?.invoke()
                                     }
                                 }
                             }
                         }
                         PeerConnection.IceConnectionState.FAILED,
                         PeerConnection.IceConnectionState.CLOSED -> {
+                            isNegotiating = false
                             _connectionState.value = WebRtcConnectionState.FAILED
                             _statusText.value = "Connection closed"
                             if (isCameraMode) {
@@ -358,6 +364,7 @@ class WebRtcSessionManager(
                                     if (_connectionState.value != WebRtcConnectionState.CONNECTED) {
                                         Log.d(TAG, "Connection failed/closed, returning to standby")
                                         stopCameraHardware()
+                                        onViewerDisconnected?.invoke()
                                     }
                                 }
                             } else {
@@ -722,8 +729,8 @@ class WebRtcSessionManager(
                     override fun onSetSuccess() {
                         isCreatingOffer = false
                         Log.d(TAG, "SetLocalDescription success (Offer)")
-                        _connectionState.value = WebRtcConnectionState.WAITING_PEER
-                        _statusText.value = "Offer ready. Waiting for Viewer..."
+                        _connectionState.value = WebRtcConnectionState.EXCHANGING_SDP
+                        _statusText.value = "Offer sent. Waiting for Viewer..."
 
                         val msg = SignalingMessage(
                             type = "OFFER",
@@ -733,27 +740,15 @@ class WebRtcSessionManager(
                             sdpType = sessionDescription.type.canonicalForm()
                         )
                         signalingClient?.sendMessage(msg)
-
-                        // Send local ICE candidates
-                        synchronized(localIceCandidates) {
-                            for (cand in localIceCandidates) {
-                                signalingClient?.sendMessage(
-                                    SignalingMessage(
-                                        type = "ICE_CANDIDATE",
-                                        senderId = "CAMERA",
-                                        targetRoom = roomId.ifBlank { currentRoomId },
-                                        sdpMid = cand.sdpMid,
-                                        sdpMLineIndex = cand.sdpMLineIndex,
-                                        candidate = cand.sdp
-                                    )
-                                )
-                            }
-                        }
                     }
 
-                    override fun onCreateFailure(p0: String?) { isCreatingOffer = false }
+                    override fun onCreateFailure(p0: String?) {
+                        isCreatingOffer = false
+                        isNegotiating = false
+                    }
                     override fun onSetFailure(p0: String?) {
                         isCreatingOffer = false
+                        isNegotiating = false
                         Log.e(TAG, "SetLocalDescription failed: $p0")
                     }
                 }, sessionDescription)
@@ -762,21 +757,50 @@ class WebRtcSessionManager(
             override fun onSetSuccess() {}
             override fun onCreateFailure(error: String?) {
                 isCreatingOffer = false
+                isNegotiating = false
                 Log.e(TAG, "CreateOffer failed: $error")
             }
-            override fun onSetFailure(p0: String?) { isCreatingOffer = false }
+            override fun onSetFailure(p0: String?) {
+                isCreatingOffer = false
+                isNegotiating = false
+            }
         }, sdpConstraints)
     }
 
     private fun resetPeerConnectionForFreshOffer(scope: CoroutineScope, roomId: String) {
-        val currentState = _connectionState.value
-        if (isCreatingOffer || currentState == WebRtcConnectionState.EXCHANGING_SDP || currentState == WebRtcConnectionState.CONNECTING_P2P || currentState == WebRtcConnectionState.CONNECTED) {
-            Log.d(TAG, "Negotiation or connection already in progress (state=$currentState, isCreatingOffer=$isCreatingOffer), ignoring duplicate ROOM_JOINED")
+        if (isNegotiating) {
+            Log.d(TAG, "Negotiation already in progress, ignoring duplicate ROOM_JOINED")
             return
         }
+        val currentState = _connectionState.value
+        if (currentState == WebRtcConnectionState.CONNECTED || currentState == WebRtcConnectionState.CONNECTING_P2P) {
+            Log.d(TAG, "Already connected/connecting (state=$currentState), ignoring duplicate ROOM_JOINED")
+            return
+        }
+
+        isNegotiating = true
+        _connectionState.value = WebRtcConnectionState.EXCHANGING_SDP
+        _statusText.value = "Viewer connecting... Preparing camera"
+
+        // Watchdog: If negotiation does not complete in 12s, release lock and revert to standby
+        scope.launch(Dispatchers.IO) {
+            delay(12000)
+            if (_connectionState.value != WebRtcConnectionState.CONNECTED) {
+                Log.d(TAG, "Negotiation timed out after 12s, resetting negotiation state")
+                isNegotiating = false
+                isCreatingOffer = false
+                if (_connectionState.value != WebRtcConnectionState.CONNECTED) {
+                    _connectionState.value = WebRtcConnectionState.WAITING_PEER
+                    _statusText.value = "Standby (Camera & Mic Off) - Waiting for viewer..."
+                    stopCameraHardware()
+                    onViewerDisconnected?.invoke()
+                }
+            }
+        }
+
         scope.launch(Dispatchers.IO) {
             try {
-                Log.d(TAG, "Resetting PeerConnection for new/reconnecting viewer in room $roomId")
+                Log.d(TAG, "Resetting PeerConnection for fresh offer in room $roomId")
                 isCreatingOffer = false
                 isRemoteDescriptionSet = false
                 pendingIceCandidates.clear()
@@ -813,9 +837,10 @@ class WebRtcSessionManager(
                 } ?: Log.e(TAG, "ERROR: localVideoTrack is null after startCameraHardware!")
 
                 createAndSendOffer(roomId)
-                onViewerConnected?.invoke()
             } catch (e: Exception) {
                 Log.e(TAG, "Error resetting peer connection for new viewer", e)
+                isNegotiating = false
+                _connectionState.value = WebRtcConnectionState.WAITING_PEER
             }
         }
     }
@@ -943,21 +968,6 @@ class WebRtcSessionManager(
                             sdpType = sessionDescription.type.canonicalForm()
                         )
                         signalingClient?.sendMessage(msg)
-
-                        synchronized(localIceCandidates) {
-                            for (cand in localIceCandidates) {
-                                signalingClient?.sendMessage(
-                                    SignalingMessage(
-                                        type = "ICE_CANDIDATE",
-                                        senderId = "VIEWER",
-                                        targetRoom = currentRoomId,
-                                        sdpMid = cand.sdpMid,
-                                        sdpMLineIndex = cand.sdpMLineIndex,
-                                        candidate = cand.sdp
-                                    )
-                                )
-                            }
-                        }
                     }
 
                     override fun onCreateFailure(p0: String?) {}

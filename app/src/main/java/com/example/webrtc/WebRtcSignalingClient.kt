@@ -177,8 +177,8 @@ class WebRtcSignalingClient(
                 }
             } catch (_: Exception) {}
             cycle++
-            // Poll rapidly every 600ms during the first 20 cycles (12 seconds), then steady at 2s
-            delay(if (cycle < 20) 600L else 2000L)
+            // Poll gently as fallback without triggering ntfy rate-limits
+            delay(if (cycle < 10) 1500L else 3000L)
         }
     }
 
@@ -204,9 +204,10 @@ class WebRtcSignalingClient(
      */
     private suspend fun startMqttLoop() {
         val brokers = listOf(
+            "ssl://broker.hivemq.com:8883",
+            "ssl://broker.emqx.io:8883",
             "tcp://broker.hivemq.com:1883",
-            "tcp://broker.emqx.io:1883",
-            "ssl://broker.emqx.io:8883"
+            "tcp://broker.emqx.io:1883"
         )
         var brokerIndex = 0
 
