@@ -791,7 +791,7 @@ class WebRtcSessionManager(
             Log.d(TAG, "Already connected and camera active, ignoring duplicate ROOM_JOINED")
             return
         }
-        executor.submit {
+        scope.launch(Dispatchers.IO) {
             try {
                 Log.d(TAG, "Resetting PeerConnection for new/reconnecting viewer in room $roomId")
                 isCreatingOffer = false
@@ -799,13 +799,13 @@ class WebRtcSessionManager(
                 pendingIceCandidates.clear()
                 localIceCandidates.clear()
 
-                // Start physical camera and mic on-demand when viewer connects
+                // Start physical camera on-demand when viewer connects
                 startCameraHardware(currentIsFrontCamera)
                 
-                // Wait up to 2 seconds for localVideoTrack to be ready
+                // Wait up to 3 seconds for localVideoTrack to be ready (non-blocking delay)
                 var attempts = 0
-                while (localVideoTrack == null && attempts < 20) {
-                    try { Thread.sleep(100) } catch (_: Exception) {}
+                while (localVideoTrack == null && attempts < 30) {
+                    kotlinx.coroutines.delay(100)
                     attempts++
                 }
 
