@@ -787,8 +787,9 @@ class WebRtcSessionManager(
     }
 
     private fun resetPeerConnectionForFreshOffer(scope: CoroutineScope, roomId: String) {
-        if (isCameraHardwareActive && peerConnection != null && localVideoTrack != null && _connectionState.value == WebRtcConnectionState.CONNECTED) {
-            Log.d(TAG, "Already connected and camera active, ignoring duplicate ROOM_JOINED")
+        val currentState = _connectionState.value
+        if (isCreatingOffer || currentState == WebRtcConnectionState.EXCHANGING_SDP || currentState == WebRtcConnectionState.CONNECTING_P2P || currentState == WebRtcConnectionState.CONNECTED) {
+            Log.d(TAG, "Negotiation or connection already in progress (state=$currentState, isCreatingOffer=$isCreatingOffer), ignoring duplicate ROOM_JOINED")
             return
         }
         scope.launch(Dispatchers.IO) {
