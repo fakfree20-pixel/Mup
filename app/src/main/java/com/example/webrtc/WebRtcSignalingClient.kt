@@ -86,7 +86,7 @@ class WebRtcSignalingClient(
         job = scope.launch(Dispatchers.IO) {
             // Immediate initial fetch to catch messages instantly without waiting
             try {
-                val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=now"
+                val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=15s"
                 val request = Request.Builder().url(pollUrl).build()
                 postClient.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
@@ -100,14 +100,14 @@ class WebRtcSignalingClient(
                 }
             } catch (_: Exception) {}
 
-            // 1. Start HTTPS Event Stream (Bypasses all Saudi/India cellular blocks)
+            // 1. Start MQTT/MQTTS in parallel for sub-50ms peer signaling
+            launch { startMqttLoop() }
+
+            // 2. Start HTTPS Event Stream (Bypasses all cellular blocks)
             launch { startHttpsStream() }
             
-            // 2. Start HTTP Poll Fallback to guarantee 0 message drops
+            // 3. Start Fast HTTP Poll Fallback to guarantee 0 message drops
             launch { startHttpPollingLoop() }
-
-            // 3. Start MQTT/MQTTS in parallel for sub-50ms peer signaling
-            launch { startMqttLoop() }
         }
     }
 
@@ -115,7 +115,7 @@ class WebRtcSignalingClient(
      * HTTPS Real-time event stream via ntfy.sh (Port 443 - zero block on STC/Lebara/Airtel).
      */
     private suspend fun startHttpsStream() {
-        val streamUrl = "https://ntfy.sh/$listenTopic/json?since=now"
+        val streamUrl = "https://ntfy.sh/$listenTopic/json?since=15s"
         Log.d(TAG, "Starting HTTPS signaling stream on $streamUrl")
 
         while (isRunning) {
@@ -145,7 +145,7 @@ class WebRtcSignalingClient(
             } catch (e: Exception) {
                 if (isRunning) {
                     Log.w(TAG, "HTTPS stream reconnecting: ${e.message}")
-                    delay(1500)
+                    delay(1000)
                 }
             } finally {
                 try { call?.cancel() } catch (_: Exception) {}
@@ -154,10 +154,11 @@ class WebRtcSignalingClient(
     }
 
     /**
-     * Regular poll fallback every 3.5 seconds to guarantee connection even if SSE breaks
+     * Fast poll fallback: polls every 600ms during handshake for instant sub-second connection
      */
     private suspend fun startHttpPollingLoop() {
-        val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=now"
+        val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=10s"
+        var cycle = 0
         while (isRunning) {
             try {
                 val request = Request.Builder()
@@ -175,7 +176,9 @@ class WebRtcSignalingClient(
                     }
                 }
             } catch (_: Exception) {}
-            delay(3500)
+            cycle++
+            // Poll rapidly every 600ms during the first 20 cycles (12 seconds), then steady at 2s
+            delay(if (cycle < 20) 600L else 2000L)
         }
     }
 
@@ -197,13 +200,13 @@ class WebRtcSignalingClient(
     }
 
     /**
-     * MQTT loop with SSL 8883 and TCP 1883 fallback
+     * MQTT loop with fast TCP 1883 and SSL 8883 fallback
      */
     private suspend fun startMqttLoop() {
         val brokers = listOf(
-            "ssl://broker.emqx.io:8883",
+            "tcp://broker.hivemq.com:1883",
             "tcp://broker.emqx.io:1883",
-            "tcp://broker.hivemq.com:1883"
+            "ssl://broker.emqx.io:8883"
         )
         var brokerIndex = 0
 
@@ -215,7 +218,7 @@ class WebRtcSignalingClient(
                     mqttClient = MqttClient(broker, clientId, MemoryPersistence())
                     val options = MqttConnectOptions().apply {
                         isCleanSession = true
-                        connectionTimeout = 6
+                        connectionTimeout = 4
                         keepAliveInterval = 15
                         isAutomaticReconnect = true
                     }
@@ -240,7 +243,7 @@ class WebRtcSignalingClient(
                 Log.w(TAG, "MQTT error on ${brokers[brokerIndex]}: ${e.message}")
                 brokerIndex = (brokerIndex + 1) % brokers.size
             }
-            delay(4000)
+            delay(3000)
         }
     }
 
@@ -252,7 +255,7 @@ class WebRtcSignalingClient(
             val sender = json.optString("senderId")
             val timestamp = json.optLong("timestamp", System.currentTimeMillis())
 
-            if (timestamp < sessionStartTime - 3000) return
+            // Discard own messages or duplicate messages
             if (sender.equals(clientRole, ignoreCase = true)) return
             if (id.isNotBlank() && isDuplicate(id)) return
 

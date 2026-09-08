@@ -73,7 +73,7 @@ class CctvForegroundService : Service() {
         acquireWakeLock()
         try {
             val notification = buildNotification("ACTIVE", "CAM")
-            startForeground(NOTIFICATION_ID, notification)
+            startForegroundWithType(notification)
         } catch (e: Exception) {
             Log.e(TAG, "Error starting foreground in onCreate", e)
         }
@@ -108,12 +108,36 @@ class CctvForegroundService : Service() {
         val notification = buildNotification(roomPin, camId)
 
         try {
-            startForeground(NOTIFICATION_ID, notification)
+            startForegroundWithType(notification)
         } catch (fatalException: Exception) {
             Log.e(TAG, "Fatal error updating foreground notification", fatalException)
         }
 
         return START_STICKY
+    }
+
+    private fun startForegroundWithType(notification: Notification) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or 
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or 
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting foreground service type", e)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

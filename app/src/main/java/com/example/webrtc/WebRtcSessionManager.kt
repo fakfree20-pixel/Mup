@@ -82,23 +82,13 @@ class WebRtcSessionManager(
      * Bypasses all ISP firewalls, NATs, and restrictions worldwide (US, EU, Middle East, Asia, India, etc.)
      */
     private val iceServers = listOf(
-        // Google Global Anycast STUN
+        // Google Global Anycast STUN (Fastest, sub-20ms resolution worldwide)
         PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
         PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer(),
-        PeerConnection.IceServer.builder("stun:stun2.l.google.com:19302").createIceServer(),
-        PeerConnection.IceServer.builder("stun:stun3.l.google.com:19302").createIceServer(),
-        PeerConnection.IceServer.builder("stun:stun4.l.google.com:19302").createIceServer(),
-        // Cloudflare Worldwide Anycast STUN
+        // Cloudflare Anycast STUN
         PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer(),
-        // Global STUN Nodes
-        PeerConnection.IceServer.builder("stun:global.stun.twilio.com:3478").createIceServer(),
-        PeerConnection.IceServer.builder("stun:stun.services.mozilla.com").createIceServer(),
-        // Global TURN Relays (UDP + TCP on Port 80 & 443)
+        // Global TURN Relays (Fastest responsive ports: UDP 80, 443 + TLS 443 fallback)
         PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80")
-            .setUsername("openrelayproject")
-            .setPassword("openrelayproject")
-            .createIceServer(),
-        PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80?transport=tcp")
             .setUsername("openrelayproject")
             .setPassword("openrelayproject")
             .createIceServer(),
@@ -106,25 +96,7 @@ class WebRtcSessionManager(
             .setUsername("openrelayproject")
             .setPassword("openrelayproject")
             .createIceServer(),
-        PeerConnection.IceServer.builder("turn:openrelay.metered.ca:443?transport=tcp")
-            .setUsername("openrelayproject")
-            .setPassword("openrelayproject")
-            .createIceServer(),
-        // TURNS over TLS on 443 (100% Unblockable across all world firewalls)
         PeerConnection.IceServer.builder("turns:openrelay.metered.ca:443?transport=tcp")
-            .setUsername("openrelayproject")
-            .setPassword("openrelayproject")
-            .createIceServer(),
-        // Secondary Worldwide Relay Node
-        PeerConnection.IceServer.builder("turn:relay.metered.ca:80")
-            .setUsername("openrelayproject")
-            .setPassword("openrelayproject")
-            .createIceServer(),
-        PeerConnection.IceServer.builder("turn:relay.metered.ca:443?transport=tcp")
-            .setUsername("openrelayproject")
-            .setPassword("openrelayproject")
-            .createIceServer(),
-        PeerConnection.IceServer.builder("turns:relay.metered.ca:443?transport=tcp")
             .setUsername("openrelayproject")
             .setPassword("openrelayproject")
             .createIceServer()
@@ -272,14 +244,14 @@ class WebRtcSessionManager(
 
         if (isCameraMode) {
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
-            _statusText.value = "Standby (Camera & Mic Off) - Waiting for viewer..."
+            _statusText.value = "Camera Active - Waiting for viewer..."
+            startCameraHardware(isFrontCamera)
         } else {
             setupViewerMediaTracks()
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
             _statusText.value = "Connecting to Camera..."
 
             scope.launch(Dispatchers.IO) {
-                delay(300)
                 signalingClient?.sendMessage(
                     SignalingMessage(
                         type = "ROOM_JOINED",
@@ -287,14 +259,24 @@ class WebRtcSessionManager(
                         targetRoom = roomId
                     )
                 )
+                delay(300)
+                if (_connectionState.value == WebRtcConnectionState.WAITING_PEER) {
+                    signalingClient?.sendMessage(
+                        SignalingMessage(
+                            type = "ROOM_JOINED",
+                            senderId = "VIEWER",
+                            targetRoom = roomId
+                        )
+                    )
+                }
             }
         }
 
-        // Background watchdog: only retry ROOM_JOINED if waiting for peer
+        // Background watchdog: fast retry if waiting for peer
         scope.launch(Dispatchers.IO) {
             var retryCount = 0
             while (scope.isActive) {
-                delay(1500)
+                delay(800)
                 val state = _connectionState.value
                 if (state == WebRtcConnectionState.WAITING_PEER || state == WebRtcConnectionState.FAILED) {
                     retryCount++
