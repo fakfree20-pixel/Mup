@@ -114,7 +114,7 @@ fun ViewerModeScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    Box(modifier = Modifier.fillMaxSize().background(if (isViewerWebRtcActive) Color.Transparent else Color.Black)) {
         if (isAnyConnected) {
             // 1. FULL SCREEN LIVE VIDEO or AUDIO ONLY
             if (isAudioOnlyMode) {
@@ -173,7 +173,12 @@ fun ViewerModeScreen(
                 WebRtcVideoPlayer(
                     videoTrack = webRtcVideoTrack,
                     eglBase = session.eglBase,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    onReconnectClick = {
+                        if (roomPinInput.isNotBlank()) {
+                            viewModel.connectWebRtc(roomPinInput)
+                        }
+                    }
                 )
             } else if (latestFrame != null) {
                 Image(
@@ -292,6 +297,22 @@ fun ViewerModeScreen(
                                 imageVector = if (isRemoteMicOn) Icons.Default.VolumeUp else Icons.Default.VolumeOff, 
                                 contentDescription = "Listen", 
                                 tint = if (isRemoteMicOn) CctvSuccessGreen else Color.White
+                            )
+                        }
+
+                        // 4. Refresh / Reconnect Stream Button
+                        IconButton(
+                            onClick = {
+                                if (roomPinInput.isNotBlank()) {
+                                    viewModel.connectWebRtc(roomPinInput)
+                                }
+                            },
+                            modifier = Modifier.size(44.dp).background(Color(0x77000000), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Refresh Stream",
+                                tint = Color.White
                             )
                         }
                     }

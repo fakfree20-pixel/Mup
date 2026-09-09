@@ -176,7 +176,7 @@ class WebRtcSessionManager(
         }
 
         val encoderFactory = try {
-            DefaultVideoEncoderFactory(rootEglBase?.eglBaseContext, false, false)
+            DefaultVideoEncoderFactory(rootEglBase?.eglBaseContext, true, true)
         } catch (e: Throwable) {
             org.webrtc.SoftwareVideoEncoderFactory()
         }
@@ -522,6 +522,17 @@ class WebRtcSessionManager(
         localAudioTrack = factory.createAudioTrack("VIEWER_TALK_TRACK", localAudioSource)
         localAudioTrack?.setEnabled(false)
         peerConnection?.addTrack(localAudioTrack, listOf("viewer_audio"))
+
+        // Explicitly declare RECV_ONLY video transceiver so WebRTC allocates video decoder pipeline
+        try {
+            peerConnection?.addTransceiver(
+                org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+                org.webrtc.RtpTransceiver.RtpTransceiverInit(org.webrtc.RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
+            )
+            Log.d(TAG, "Added RECV_ONLY video transceiver for viewer")
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not add explicit RECV_ONLY video transceiver: ${e.message}")
+        }
     }
 
     @Synchronized
@@ -547,7 +558,20 @@ class WebRtcSessionManager(
                 videoCapturer = createCameraCapturer(isFrontCamera)
                 videoCapturer?.let { capturer ->
                     capturer.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
-                    capturer.startCapture(1280, 720, 30)
+                    try {
+                        capturer.startCapture(1280, 720, 30)
+                        Log.d(TAG, "Camera started at 1280x720 30fps")
+                    } catch (e1: Throwable) {
+                        Log.w(TAG, "1280x720 capture failed, trying 640x480: ${e1.message}")
+                        try {
+                            capturer.startCapture(640, 480, 30)
+                            Log.d(TAG, "Camera started at 640x480 30fps")
+                        } catch (e2: Throwable) {
+                            Log.w(TAG, "640x480 capture failed, trying 320x240: ${e2.message}")
+                            capturer.startCapture(320, 240, 15)
+                            Log.d(TAG, "Camera started at 320x240 15fps")
+                        }
+                    }
                 }
             }
 
@@ -671,10 +695,20 @@ class WebRtcSessionManager(
     }
 
     private fun createCameraCapturer(isFront: Boolean): VideoCapturer? {
-        val enumerators = listOf(
-            org.webrtc.Camera2Enumerator(context),
-            org.webrtc.Camera1Enumerator(false)
-        )
+        val enumerators = mutableListOf<org.webrtc.CameraEnumerator>()
+        try {
+            if (org.webrtc.Camera2Enumerator.isSupported(context)) {
+                enumerators.add(org.webrtc.Camera2Enumerator(context))
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "Camera2Enumerator check failed: ${e.message}")
+        }
+        try {
+            // captureToTexture = true is required for SurfaceTextureHelper and hardware encoders
+            enumerators.add(org.webrtc.Camera1Enumerator(true))
+        } catch (e: Throwable) {
+            Log.w(TAG, "Camera1Enumerator creation failed: ${e.message}")
+        }
         
         for (enumerator in enumerators) {
             try {
@@ -878,6 +912,20 @@ class WebRtcSessionManager(
                             isRemoteDescriptionSet = true
                             drainPendingIceCandidates()
                             createAndSendAnswer()
+                            
+                            // Check if video transceiver already has track available
+                            try {
+                                peerConnection?.transceivers?.forEach { transceiver ->
+                                    val track = transceiver.receiver.track()
+                                    if (track is VideoTrack) {
+                                        Log.d(TAG, "Found VideoTrack in transceiver after setRemoteDescription")
+                                        track.setEnabled(true)
+                                        _remoteVideoTrack.value = track
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Error checking transceivers: ${e.message}")
+                            }
                         }
                         override fun onCreateFailure(p0: String?) {}
                         override fun onSetFailure(err: String?) {
