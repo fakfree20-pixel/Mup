@@ -948,6 +948,15 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
 
         disconnectWebRtc()
 
+        // If this is a 4-8 digit numeric PIN or a WebRTC room ID, route to WebRTC
+        val isNumericPin = trimmed.all { it.isDigit() } && trimmed.length in 4..8
+        val isWebRtcSaved = savedCameras.value.any { it.cameraId == trimmed && (it.port == 0 || it.host.startsWith("WebRTC_PIN_")) }
+        if (isNumericPin || isWebRtcSaved || trimmed.startsWith("WebRTC_PIN_")) {
+            val pin = trimmed.removePrefix("WebRTC_PIN_")
+            connectWebRtc(pin)
+            return
+        }
+
         // Check if matching discovered camera
         val match = _discoveredCameras.value.firstOrNull {
             it.cameraId.equals(trimmed, ignoreCase = true) || it.host == trimmed

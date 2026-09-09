@@ -509,21 +509,8 @@ class WebRtcSessionManager(
     }
 
     private fun setupViewerMediaTracks() {
-        val factory = peerConnectionFactory ?: return
-        val audioConstraints = MediaConstraints().apply {
-            mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation2", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression2", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
-        }
-        localAudioSource = factory.createAudioSource(audioConstraints)
-        localAudioTrack = factory.createAudioTrack("VIEWER_TALK_TRACK", localAudioSource)
-        localAudioTrack?.setEnabled(false)
-        peerConnection?.addTrack(localAudioTrack, listOf("viewer_audio"))
-
         // Explicitly declare RECV_ONLY video transceiver so WebRTC allocates video decoder pipeline
+        // directly aligned with camera's video offer.
         try {
             peerConnection?.addTransceiver(
                 org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
@@ -807,8 +794,8 @@ class WebRtcSessionManager(
             return
         }
         val currentState = _connectionState.value
-        if (currentState == WebRtcConnectionState.CONNECTED || currentState == WebRtcConnectionState.CONNECTING_P2P) {
-            Log.d(TAG, "Already connected/connecting (state=$currentState), ignoring duplicate ROOM_JOINED")
+        if (currentState == WebRtcConnectionState.CONNECTED) {
+            Log.d(TAG, "Already connected (state=$currentState), ignoring duplicate ROOM_JOINED")
             return
         }
 

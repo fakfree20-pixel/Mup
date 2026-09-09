@@ -35,6 +35,8 @@ import com.example.ui.strings.AppLanguage
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.CctvViewModel
 import com.example.webrtc.WebRtcConnectionState
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 @Composable
 fun ViewerModeScreen(
@@ -89,10 +91,10 @@ fun ViewerModeScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_START) {
-                if (viewModel.savedCameras.value.isNotEmpty() && !viewModel.isViewerWebRtcActive.value) {
+                // Pre-fill PIN if empty, but do NOT auto-connect into a trapped state
+                if (viewModel.savedCameras.value.isNotEmpty() && viewModel.viewerRoomPinInput.value.isBlank()) {
                     val mostRecent = viewModel.savedCameras.value.first()
                     viewModel.setViewerRoomPinInput(mostRecent.cameraId)
-                    viewModel.connectToCamera(mostRecent.cameraId)
                 }
             } else if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
                 // When viewer app is put into background (home button pressed), disconnect so old phone turns off
@@ -103,6 +105,19 @@ fun ViewerModeScreen(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.disconnectViewer()
+        }
+    }
+
+    var connectionAttemptSeconds by remember { mutableIntStateOf(0) }
+    LaunchedEffect(isAttemptingConnection) {
+        if (isAttemptingConnection) {
+            connectionAttemptSeconds = 0
+            while (isActive) {
+                delay(1000)
+                connectionAttemptSeconds++
+            }
+        } else {
+            connectionAttemptSeconds = 0
         }
     }
 
@@ -394,38 +409,166 @@ fun ViewerModeScreen(
                 verticalArrangement = Arrangement.Center
             ) {
                 if (isAttemptingConnection) {
-                    CircularProgressIndicator(
-                        color = Color(0xFFCE93D8),
-                        modifier = Modifier.size(52.dp),
-                        strokeWidth = 4.dp
-                    )
-                    Spacer(modifier = Modifier.height(20.dp))
-                    Text(
-                        text = if (language == AppLanguage.HINDI) "कैमरा से कनेक्ट हो रहा है..." else "Connecting to Camera...",
-                        color = Color.White,
-                        fontSize = 16.sp
-                    )
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E2230)),
+                        shape = RoundedCornerShape(16.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF374151))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            CircularProgressIndicator(
+                                color = Color(0xFFCE93D8),
+                                modifier = Modifier.size(52.dp),
+                                strokeWidth = 4.dp
+                            )
+                            Spacer(modifier = Modifier.height(18.dp))
+                            Text(
+                                text = if (language == AppLanguage.HINDI) "कैमरा से कनेक्ट हो रहा है..." else "Connecting to Camera...",
+                                color = Color.White,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center
+                            )
+                            
+                            if (roomPinInput.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Surface(
+                                    color = Color(0xFF2A2D3D),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF673AB7))
+                                ) {
+                                    Text(
+                                        text = (if (language == AppLanguage.HINDI) "कमरा पिन: " else "Room PIN: ") + roomPinInput,
+                                        color = Color(0xFFCE93D8),
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = if (webRtcStatus.isNotBlank() && webRtcStatus != "Disconnected") 
+                                    webRtcStatus 
+                                    else (if (language == AppLanguage.HINDI) "पुराने फोन का इंतज़ार है..." else "Waiting for camera phone..."),
+                                color = Color(0xFFB0BEC5),
+                                fontSize = 13.sp,
+                                textAlign = TextAlign.Center
+                            )
+
+                            Text(
+                                text = "${connectionAttemptSeconds}s",
+                                color = Color.Gray,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+
+                            // Troubleshooting tips after 6 seconds
+                            if (connectionAttemptSeconds >= 6) {
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(Color(0xFF131722), RoundedCornerShape(10.dp))
+                                        .padding(12.dp)
+                                ) {
+                                    Text(
+                                        text = if (language == AppLanguage.HINDI) "💡 कृपया सुनिश्चित करें:" else "💡 Please make sure:",
+                                        color = Color(0xFFFFD54F),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = if (language == AppLanguage.HINDI) 
+                                            "1. पुराने फोन में ऐप खुला है और 'Camera Mode' चालू है\n2. दोनों फोन में रूम पिन ($roomPinInput) एक ही डाला है\n3. दोनों फोन में इंटरनेट (4G/5G/Wi-Fi) चल रहा है" 
+                                            else 
+                                            "1. Camera Mode is open on the other phone\n2. Same Room PIN ($roomPinInput) is entered on both\n3. Both phones have active Internet (4G/5G/Wi-Fi)",
+                                        color = Color(0xFFCFD8DC),
+                                        fontSize = 11.sp,
+                                        lineHeight = 16.sp
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(20.dp))
+
+                            // Action buttons
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                if (connectionAttemptSeconds >= 12) {
+                                    Button(
+                                        onClick = { viewModel.connectWebRtc(roomPinInput) },
+                                        modifier = Modifier.weight(1f).height(46.dp),
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF673AB7))
+                                    ) {
+                                        Text(
+                                            text = if (language == AppLanguage.HINDI) "पुनः प्रयास" else "Retry",
+                                            fontSize = 14.sp
+                                        )
+                                    }
+                                }
+
+                                OutlinedButton(
+                                    onClick = { viewModel.disconnectViewer() },
+                                    modifier = Modifier.weight(1f).height(46.dp),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF5252)),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF5252))
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (language == AppLanguage.HINDI) "रद्द करें" else "Cancel",
+                                        fontSize = 14.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
                 } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Start
+                    ) {
+                        IconButton(onClick = onBackToSelection) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowBack,
+                                contentDescription = "Back",
+                                tint = Color.White
+                            )
+                        }
+                    }
+                    
                     Icon(
                         imageVector = Icons.Default.CameraAlt,
                         contentDescription = "Camera",
-                        modifier = Modifier.size(72.dp),
+                        modifier = Modifier.size(64.dp),
                         tint = Color(0xFFCE93D8)
                     )
-                    Spacer(modifier = Modifier.height(24.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
                     Text(
                         text = if (language == AppLanguage.HINDI) "कैमरा से जुड़ें" else "Connect to Camera",
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = if (language == AppLanguage.HINDI) "पुराने फोन का रूम पिन डालें" else "Enter old phone's Room PIN",
+                        text = if (language == AppLanguage.HINDI) "पुराने फोन का 6-अंक रूम पिन डालें" else "Enter old phone's 6-digit Room PIN",
                         fontSize = 14.sp,
                         color = Color.Gray
                     )
-                    Spacer(modifier = Modifier.height(32.dp))
+                    Spacer(modifier = Modifier.height(24.dp))
                     
                     OutlinedTextField(
                         value = roomPinInput,
@@ -443,13 +586,13 @@ fun ViewerModeScreen(
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
                     )
                     
-                    Spacer(modifier = Modifier.height(24.dp))
+                    Spacer(modifier = Modifier.height(20.dp))
                     
                     Button(
                         onClick = { viewModel.connectWebRtc(roomPinInput) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(56.dp),
+                            .height(54.dp),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color(0xFF673AB7)
@@ -460,6 +603,37 @@ fun ViewerModeScreen(
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold
                         )
+                    }
+
+                    if (savedCameras.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Text(
+                            text = if (language == AppLanguage.HINDI) "हाल के कैमरे:" else "Recent Cameras:",
+                            color = Color.Gray,
+                            fontSize = 12.sp,
+                            modifier = Modifier.align(Alignment.Start)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            savedCameras.take(3).forEach { cam ->
+                                val cleanId = cam.cameraId.removePrefix("WebRTC_PIN_")
+                                OutlinedButton(
+                                    onClick = {
+                                        viewModel.setViewerRoomPinInput(cleanId)
+                                        viewModel.connectWebRtc(cleanId)
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFCE93D8)),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF673AB7)),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Text(cleanId, fontSize = 13.sp)
+                                }
+                            }
+                        }
                     }
                 }
             }

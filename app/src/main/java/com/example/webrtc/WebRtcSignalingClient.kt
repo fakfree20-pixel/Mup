@@ -41,6 +41,7 @@ class WebRtcSignalingClient(
 
     private var isRunning = false
     private var job: Job? = null
+    private var clientScope: CoroutineScope? = null
     
     private val processedIds = Collections.synchronizedSet(mutableSetOf<String>())
     private val processedIdsList = Collections.synchronizedList(mutableListOf<String>())
@@ -80,6 +81,7 @@ class WebRtcSignalingClient(
     fun start(scope: CoroutineScope) {
         if (isRunning) return
         isRunning = true
+        clientScope = scope
         sessionStartTime = System.currentTimeMillis()
         onStateChanged?.invoke("Connecting to Global Relay...")
 
@@ -188,6 +190,28 @@ class WebRtcSignalingClient(
             val json = JSONObject(line)
             val event = json.optString("event")
             if (event == "message") {
+                // If message is converted to an attachment by ntfy (payload > 4KB, e.g. large SDP)
+                if (json.has("attachment")) {
+                    val attObj = json.optJSONObject("attachment")
+                    val attUrl = attObj?.optString("url")
+                    if (!attUrl.isNullOrBlank()) {
+                        clientScope?.launch(Dispatchers.IO) {
+                            try {
+                                val req = Request.Builder().url(attUrl).build()
+                                postClient.newCall(req).execute().use { resp ->
+                                    val content = resp.body?.string()
+                                    if (!content.isNullOrBlank()) {
+                                        parseAndDispatch(content)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to download attachment payload: ${e.message}")
+                            }
+                        }
+                        return
+                    }
+                }
+
                 val messageContent = json.optString("message")
                 if (messageContent.isNotEmpty()) {
                     parseAndDispatch(messageContent)
