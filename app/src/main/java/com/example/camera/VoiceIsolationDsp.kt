@@ -87,19 +87,15 @@ class VoiceIsolationDsp(private val sampleRate: Int = 16000) {
         }
     }
 
-    // Cascaded High-pass filters at 300Hz (cuts engine rumble and motorcycle exhaust heavily: 24dB/octave)
-    private val hpf1 = Biquad().apply { setHighPass(sampleRate, 300.0, 0.7071) }
-    private val hpf2 = Biquad().apply { setHighPass(sampleRate, 300.0, 0.7071) }
+    // Cascaded High-pass filter at 150Hz (gently cuts low vehicle engine rumble and wind)
+    private val hpf1 = Biquad().apply { setHighPass(sampleRate, 150.0, 0.7071) }
 
-    // Low-pass filter at 3400Hz (cuts high screech and road tire hiss)
-    private val lpf = Biquad().apply { setLowPass(sampleRate, 3400.0, 0.7071) }
-
-    // Speech formant enhancer at 1800Hz (boosts human vocal clarity)
-    private val formantEq = Biquad().apply { setPeakingEq(sampleRate, 1800.0, 1.2, 5.0) }
+    // Low-pass filter at 3800Hz (cuts high screech and road tire hiss)
+    private val lpf = Biquad().apply { setLowPass(sampleRate, 3800.0, 0.7071) }
 
     // Adaptive noise gate state
     private var noiseFloor = 180.0
-    private var currentGateGain = 0.1
+    private var currentGateGain = 0.2
     private var holdCounter = 0
     private val HOLD_SAMPLES = (sampleRate * 0.25).toInt() // 250ms hold time for natural speech
 
@@ -140,27 +136,23 @@ class VoiceIsolationDsp(private val sampleRate: Int = 16000) {
 
         val targetGateGain = if (isVoiceActive) {
             holdCounter = HOLD_SAMPLES
-            1.25 // Clear boost for human voice
+            1.0 // Clean natural speech level (never amplify to avoid clipping/feedback)
         } else if (holdCounter > 0) {
             holdCounter -= sampleCount
-            1.0 // Hold open during brief pauses between words
+            0.9 // Hold open during brief pauses between words
         } else {
-            0.06 // Cut traffic / motorcycle idling by ~24dB
+            0.2 // Attenuate background noise gently
         }
 
         // 2. Apply filtering and smoothed dynamic gain to each sample
         for (i in 0 until sampleCount) {
             var s = samples[i]
 
-            // Apply steep low-cut / HPF (strips motorcycle/vehicle engine rumble)
+            // Apply low-cut / HPF (strips vehicle engine rumble)
             s = hpf1.process(s)
-            s = hpf2.process(s)
 
             // Apply high-cut / LPF (strips road tire friction hiss)
             s = lpf.process(s)
-
-            // Enhance speech clarity formant
-            s = formantEq.process(s)
 
             // Smooth gain envelope (fast attack 5ms, smooth release 40ms)
             val attackSmoothing = if (targetGateGain > currentGateGain) 0.15 else 0.02
@@ -191,11 +183,9 @@ class VoiceIsolationDsp(private val sampleRate: Int = 16000) {
 
     fun reset() {
         hpf1.reset()
-        hpf2.reset()
         lpf.reset()
-        formantEq.reset()
         noiseFloor = 180.0
-        currentGateGain = 0.1
+        currentGateGain = 0.2
         holdCounter = 0
     }
 }

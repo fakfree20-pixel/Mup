@@ -83,8 +83,9 @@ fun ViewerModeScreen(
         webRtcConnState == WebRtcConnectionState.CONNECTING_P2P
     ))
 
-    androidx.activity.compose.BackHandler(enabled = isAnyConnected || isAttemptingConnection) {
+    androidx.activity.compose.BackHandler {
         viewModel.disconnectViewer()
+        onBackToSelection()
     }
     
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current

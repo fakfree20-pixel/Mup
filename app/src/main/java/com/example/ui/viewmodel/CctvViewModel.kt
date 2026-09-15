@@ -11,6 +11,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
 import com.example.camera.AudioStreamManager
 import com.example.camera.BatteryMonitor
+import com.example.camera.CallProtectionManager
 import com.example.camera.CameraManager
 import com.example.camera.CctvForegroundService
 import com.example.data.db.AppDatabase
@@ -213,6 +214,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     
     
     private val discovery = CctvDiscovery(application)
+    private var callProtectionManager: CallProtectionManager? = null
     
 
     // --- VIEWER MODE STATE (New Phone) ---
@@ -431,6 +433,26 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         _isCameraStreaming.value = true
 
         // 4. Start WebRTC Session for Mobile Data / Cellular P2P low latency
+        callProtectionManager?.stopMonitoring()
+        callProtectionManager = CallProtectionManager(
+            context = getApplication(),
+            onCallStarted = {
+                Log.i("CctvViewModel", "Zero-disturbance: WhatsApp/IMO/Phone call active. Pausing camera & mic.")
+                cameraWebRtcSession?.pauseForPhoneCall()
+                audioStreamManager.stopMicrophoneStreaming()
+                audioStreamManager.stopSpeakerAudio()
+            },
+            onCallEnded = {
+                Log.i("CctvViewModel", "Call finished. Resuming camera & mic if viewer is active.")
+                if (_connectedViewersCount.value > 0) {
+                    audioStreamManager.startMicrophoneStreaming(backgroundScope)
+                }
+                cameraWebRtcSession?.resumeAfterPhoneCall(backgroundScope)
+            }
+        ).apply {
+            startMonitoring(backgroundScope)
+        }
+
         backgroundScope.launch {
             try {
                 cameraWebRtcSession = WebRtcSessionManager(
@@ -778,6 +800,8 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopCameraMode() {
+        callProtectionManager?.stopMonitoring()
+        callProtectionManager = null
         try {
             CctvForegroundService.stopService(getApplication())
         } catch (_: Exception) {}
@@ -921,7 +945,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         audioStreamManager.stopSpeakerAudio()
         backgroundScope.launch {
             try {
-                session?.sendCommand("VIEWER_DISCONNECT")
+                session?.notifyViewerDisconnect()
                 delay(150)
             } catch (_: Exception) {}
             session?.release()

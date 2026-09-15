@@ -247,8 +247,8 @@ class WebRtcSessionManager(
 
         if (isCameraMode) {
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
-            _statusText.value = "Standby (Camera & Mic Off) - Waiting for viewer..."
-            // Camera hardware remains OFF until the viewer connects
+            _statusText.value = "💤 Standby (Camera & Mic Off) - Waiting for viewer..."
+            // Camera hardware and microphone remain completely OFF until a viewer connects!
         } else {
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
             _statusText.value = "Connecting to Camera..."
@@ -343,14 +343,16 @@ class WebRtcSessionManager(
                         PeerConnection.IceConnectionState.DISCONNECTED -> {
                             isNegotiating = false
                             _connectionState.value = WebRtcConnectionState.DISCONNECTED
-                            _statusText.value = "Viewer disconnected. Re-establishing..."
+                            _statusText.value = "Viewer disconnected"
                             if (isCameraMode) {
                                 scope.launch(Dispatchers.IO) {
-                                    delay(4000)
+                                    delay(1000)
                                     if (_connectionState.value == WebRtcConnectionState.DISCONNECTED) {
-                                        Log.d(TAG, "Disconnected for 4s, stopping camera hardware for standby")
+                                        Log.d(TAG, "Viewer disconnected, immediately shutting down camera & mic")
                                         stopCameraHardware()
                                         onViewerDisconnected?.invoke()
+                                        _connectionState.value = WebRtcConnectionState.WAITING_PEER
+                                        _statusText.value = "💤 Standby (Camera & Mic Off) - Waiting for viewer..."
                                     }
                                 }
                             }
@@ -361,14 +363,11 @@ class WebRtcSessionManager(
                             _connectionState.value = WebRtcConnectionState.FAILED
                             _statusText.value = "Connection closed"
                             if (isCameraMode) {
-                                scope.launch(Dispatchers.IO) {
-                                    delay(2000)
-                                    if (_connectionState.value != WebRtcConnectionState.CONNECTED) {
-                                        Log.d(TAG, "Connection failed/closed, returning to standby")
-                                        stopCameraHardware()
-                                        onViewerDisconnected?.invoke()
-                                    }
-                                }
+                                Log.d(TAG, "Connection failed/closed, shutting down camera & mic immediately")
+                                stopCameraHardware()
+                                onViewerDisconnected?.invoke()
+                                _connectionState.value = WebRtcConnectionState.WAITING_PEER
+                                _statusText.value = "💤 Standby (Camera & Mic Off) - Waiting for viewer..."
                             } else {
                                 peerConnection?.restartIce()
                             }
@@ -461,6 +460,8 @@ class WebRtcSessionManager(
             val dcInit = DataChannel.Init().apply { ordered = true }
             dataChannel = peerConnection?.createDataChannel("cctv_commands", dcInit)
             dataChannel?.let { setupDataChannelListeners(it) }
+        } else {
+            setupViewerMediaTracks()
         }
     }
 
@@ -684,43 +685,6 @@ class WebRtcSessionManager(
     }
 
     private fun createCameraCapturer(isFront: Boolean): VideoCapturer? {
-        val enumerators = mutableListOf<org.webrtc.CameraEnumerator>()
-        var useCamera2 = false
-        try {
-            val cameraManager = context.getSystemService(android.content.Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
-            if (cameraManager != null && org.webrtc.Camera2Enumerator.isSupported(context)) {
-                val cameraIds = cameraManager.cameraIdList
-                if (cameraIds.isNotEmpty()) {
-                    val chars = cameraManager.getCameraCharacteristics(cameraIds[0])
-                    val level = chars.get(android.hardware.camera2.CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
-                    if (level != null && level != android.hardware.camera2.CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY) {
-                        useCamera2 = true
-                    }
-                }
-            }
-        } catch (e: Throwable) {
-            Log.w(TAG, "Camera2 check failed: ${e.message}")
-        }
-
-        if (useCamera2) {
-            try {
-                enumerators.add(org.webrtc.Camera2Enumerator(context))
-            } catch (e: Throwable) {
-                Log.w(TAG, "Camera2Enumerator creation failed: ${e.message}")
-            }
-        }
-        try {
-            // captureToTexture = true is required for SurfaceTextureHelper and hardware encoders
-            enumerators.add(org.webrtc.Camera1Enumerator(true))
-        } catch (e: Throwable) {
-            Log.w(TAG, "Camera1Enumerator creation failed: ${e.message}")
-        }
-        if (!useCamera2 && org.webrtc.Camera2Enumerator.isSupported(context)) {
-            try {
-                enumerators.add(org.webrtc.Camera2Enumerator(context))
-            } catch (_: Throwable) {}
-        }
-
         val cameraEventsHandler = object : CameraVideoCapturer.CameraEventsHandler {
             override fun onCameraError(errorDescription: String?) {
                 Log.e(TAG, "Camera error event: $errorDescription")
@@ -741,28 +705,58 @@ class WebRtcSessionManager(
                 Log.d(TAG, "Camera closed")
             }
         }
-        
+
+        val enumerators = mutableListOf<org.webrtc.CameraEnumerator>()
+
+        // 1. Check Camera2 support
+        if (org.webrtc.Camera2Enumerator.isSupported(context)) {
+            try {
+                enumerators.add(org.webrtc.Camera2Enumerator(context))
+            } catch (e: Throwable) {
+                Log.w(TAG, "Camera2Enumerator failed: ${e.message}")
+            }
+        }
+
+        // 2. Camera1 with texture capture
+        try {
+            enumerators.add(org.webrtc.Camera1Enumerator(true))
+        } catch (e: Throwable) {
+            Log.w(TAG, "Camera1Enumerator (texture) failed: ${e.message}")
+        }
+
+        // 3. Camera1 without texture capture (raw buffer fallback for older phones)
+        try {
+            enumerators.add(org.webrtc.Camera1Enumerator(false))
+        } catch (e: Throwable) {
+            Log.w(TAG, "Camera1Enumerator (no texture) failed: ${e.message}")
+        }
+
         for (enumerator in enumerators) {
             try {
-                val deviceNames = enumerator.deviceNames
+                val deviceNames = enumerator.deviceNames ?: continue
+                // First pass: match exact facing (front or back)
                 for (name in deviceNames) {
-                    if (isFront && enumerator.isFrontFacing(name)) {
+                    if ((isFront && enumerator.isFrontFacing(name)) || (!isFront && enumerator.isBackFacing(name))) {
                         val capturer = enumerator.createCapturer(name, cameraEventsHandler)
-                        if (capturer != null) return capturer
-                    }
-                    if (!isFront && enumerator.isBackFacing(name)) {
-                        val capturer = enumerator.createCapturer(name, cameraEventsHandler)
-                        if (capturer != null) return capturer
+                        if (capturer != null) {
+                            Log.d(TAG, "Successfully created capturer for $name using ${enumerator.javaClass.simpleName}")
+                            return capturer
+                        }
                     }
                 }
+                // Second pass: pick any available camera on the device
                 for (name in deviceNames) {
                     val capturer = enumerator.createCapturer(name, cameraEventsHandler)
-                    if (capturer != null) return capturer
+                    if (capturer != null) {
+                        Log.d(TAG, "Successfully created fallback capturer for $name using ${enumerator.javaClass.simpleName}")
+                        return capturer
+                    }
                 }
             } catch (e: Throwable) {
                 Log.w(TAG, "Enumerator failed: ${enumerator.javaClass.simpleName}", e)
             }
         }
+        Log.e(TAG, "No working camera capturer found on device!")
         return null
     }
 
@@ -877,7 +871,7 @@ class WebRtcSessionManager(
         _connectionState.value = WebRtcConnectionState.EXCHANGING_SDP
         _statusText.value = "Viewer connecting... Preparing camera"
 
-        // Watchdog: If negotiation does not complete in 12s, release lock and revert to standby
+        // Watchdog: If negotiation does not complete in 12s, release lock and revert to waiting
         scope.launch(Dispatchers.IO) {
             delay(12000)
             if (_connectionState.value != WebRtcConnectionState.CONNECTED) {
@@ -886,8 +880,7 @@ class WebRtcSessionManager(
                 isCreatingOffer = false
                 if (_connectionState.value != WebRtcConnectionState.CONNECTED) {
                     _connectionState.value = WebRtcConnectionState.WAITING_PEER
-                    _statusText.value = "Standby (Camera & Mic Off) - Waiting for viewer..."
-                    stopCameraHardware()
+                    _statusText.value = "Camera Active - Waiting for viewer..."
                     onViewerDisconnected?.invoke()
                 }
             }
@@ -901,8 +894,10 @@ class WebRtcSessionManager(
                 pendingIceCandidates.clear()
                 localIceCandidates.clear()
 
-                // Start physical camera on-demand when viewer connects
-                startCameraHardware(currentIsFrontCamera)
+                // Ensure physical camera is running and capturing
+                if (localVideoTrack == null || videoCapturer == null) {
+                    startCameraHardware(currentIsFrontCamera)
+                }
                 
                 // Wait up to 3 seconds for localVideoTrack to be ready (non-blocking delay)
                 var attempts = 0
@@ -946,8 +941,8 @@ class WebRtcSessionManager(
             "ROOM_JOINED", "START_STREAM", "VIEWER_CONNECT" -> {
                 if (isCameraMode) {
                     val currentConn = _connectionState.value
-                    if (currentConn == WebRtcConnectionState.CONNECTED) {
-                        Log.d(TAG, "Viewer joined room, but camera already connected. Skipping reset.")
+                    if (currentConn == WebRtcConnectionState.CONNECTED && localVideoTrack != null) {
+                        Log.d(TAG, "Viewer joined room, but camera already connected with video. Skipping reset.")
                         return
                     }
                     if (isNegotiating || isCreatingOffer) {
@@ -955,19 +950,22 @@ class WebRtcSessionManager(
                         return
                     }
                     val now = System.currentTimeMillis()
-                    if (now - lastOfferTimestamp < 3500) {
-                        Log.d(TAG, "Viewer joined room, but throttled (< 3.5s). Skipping duplicate reset.")
+                    if (now - lastOfferTimestamp < 2500) {
+                        Log.d(TAG, "Viewer joined room, but throttled (< 2.5s). Skipping duplicate reset.")
                         return
                     }
                     lastOfferTimestamp = now
-                    Log.d(TAG, "Viewer joined room, activating camera & sending fresh offer")
+                    Log.d(TAG, "Viewer joined room, preparing fresh offer with video track")
                     resetPeerConnectionForFreshOffer(scope, msg.targetRoom.ifBlank { currentRoomId })
                 }
             }
             "ROOM_LEFT", "LEAVE", "VIEWER_DISCONNECT", "STOP_STREAM" -> {
                 if (isCameraMode) {
-                    Log.d(TAG, "Viewer left room, releasing camera hardware and entering standby")
-                    executor.submit { stopCameraHardware() }
+                    Log.d(TAG, "Viewer explicitly left room, immediately stopping camera hardware & mic")
+                    stopCameraHardware()
+                    onViewerDisconnected?.invoke()
+                    _connectionState.value = WebRtcConnectionState.WAITING_PEER
+                    _statusText.value = "💤 Standby (Camera & Mic Off) - Waiting for viewer..."
                 }
             }
             "OFFER" -> {
@@ -1176,6 +1174,54 @@ class WebRtcSessionManager(
             } catch (e: Exception) {
                 Log.w(TAG, "Error releasing WebRTC resources", e)
             }
+        }
+    }
+
+    fun notifyViewerDisconnect() {
+        try {
+            signalingClient?.sendMessage(
+                SignalingMessage(
+                    type = "VIEWER_DISCONNECT",
+                    senderId = "VIEWER",
+                    targetRoom = currentRoomId
+                )
+            )
+        } catch (_: Exception) {}
+        try {
+            sendCommand("VIEWER_DISCONNECT")
+        } catch (_: Exception) {}
+    }
+
+    @Volatile
+    var isCallPaused = false
+        private set
+
+    fun pauseForPhoneCall() {
+        if (!isCameraMode) return
+        Log.i(TAG, "Phone call / VoIP detected! Pausing camera hardware for zero disturbance.")
+        isCallPaused = true
+        stopCameraHardware()
+        try {
+            sendCommand("PHONE_CALL_ACTIVE")
+        } catch (_: Exception) {}
+        _statusText.value = "📞 कॉल चालू है (कैमरा व माइक रोके गए)"
+    }
+
+    fun resumeAfterPhoneCall(scope: CoroutineScope) {
+        if (!isCameraMode || !isCallPaused) return
+        Log.i(TAG, "Phone call / VoIP finished. Resuming camera.")
+        isCallPaused = false
+        if (_connectionState.value == WebRtcConnectionState.CONNECTED) {
+            startCameraHardware(currentIsFrontCamera)
+            localVideoTrack?.let {
+                peerConnection?.addTrack(it, listOf("cctv_stream"))
+            }
+            try {
+                sendCommand("PHONE_CALL_ENDED")
+            } catch (_: Exception) {}
+            _statusText.value = "● Live Stream Connected"
+        } else {
+            _statusText.value = "💤 Standby (Camera & Mic Off) - Waiting for viewer..."
         }
     }
 }

@@ -36,7 +36,10 @@ class AudioStreamManager(private val context: Context) {
 
     // Voice Isolation & Vehicle Noise Elimination DSP
     private val voiceDsp = VoiceIsolationDsp(SAMPLE_RATE)
-    var isVoiceFilterActive = true
+    var isVoiceFilterActive = false
+
+    private var echoCanceler: android.media.audiofx.AcousticEchoCanceler? = null
+    private var noiseSuppressor: android.media.audiofx.NoiseSuppressor? = null
 
     // Listeners for outgoing microphone packets
     private val audioListeners = CopyOnWriteArrayList<(ByteArray) -> Unit>()
@@ -55,10 +58,11 @@ class AudioStreamManager(private val context: Context) {
 
         try {
             val minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_IN, AUDIO_FORMAT)
-            val bufferSize = (minBufferSize * 2).coerceAtLeast(1024)
+            val bufferSize = (minBufferSize * 2).coerceAtLeast(2048)
 
+            // AudioSource.VOICE_COMMUNICATION activates device hardware AEC, AGC, and NS DSP
             audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 SAMPLE_RATE,
                 CHANNEL_CONFIG_IN,
                 AUDIO_FORMAT,
@@ -66,8 +70,38 @@ class AudioStreamManager(private val context: Context) {
             )
 
             if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioRecord initialization failed")
+                Log.e(TAG, "AudioRecord initialization failed, falling back to MIC source")
+                audioRecord = AudioRecord(
+                    MediaRecorder.AudioSource.MIC,
+                    SAMPLE_RATE,
+                    CHANNEL_CONFIG_IN,
+                    AUDIO_FORMAT,
+                    bufferSize
+                )
+            }
+
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                Log.e(TAG, "AudioRecord failed to initialize")
                 return
+            }
+
+            // Enable hardware Acoustic Echo Canceler if supported by device chipset
+            try {
+                val sessionId = audioRecord?.audioSessionId ?: 0
+                if (sessionId != 0 && android.media.audiofx.AcousticEchoCanceler.isAvailable()) {
+                    echoCanceler = android.media.audiofx.AcousticEchoCanceler.create(sessionId)?.apply {
+                        enabled = true
+                        Log.d(TAG, "Hardware AcousticEchoCanceler enabled successfully")
+                    }
+                }
+                if (sessionId != 0 && android.media.audiofx.NoiseSuppressor.isAvailable()) {
+                    noiseSuppressor = android.media.audiofx.NoiseSuppressor.create(sessionId)?.apply {
+                        enabled = true
+                        Log.d(TAG, "Hardware NoiseSuppressor enabled successfully")
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "Could not attach hardware audio effects: ${e.message}")
             }
 
             audioRecord?.startRecording()
@@ -102,6 +136,10 @@ class AudioStreamManager(private val context: Context) {
         recordingJob?.cancel()
         recordingJob = null
         try {
+            echoCanceler?.release()
+            echoCanceler = null
+            noiseSuppressor?.release()
+            noiseSuppressor = null
             audioRecord?.stop()
             audioRecord?.release()
         } catch (e: Exception) {
@@ -118,7 +156,7 @@ class AudioStreamManager(private val context: Context) {
                 val bufferSize = (minBufferSize * 2).coerceAtLeast(2048)
 
                 val attributes = AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
 
