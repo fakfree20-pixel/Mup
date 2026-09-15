@@ -35,8 +35,7 @@ fun WebRtcVideoPlayer(
     isMirror: Boolean = false,
     onReconnectClick: (() -> Unit)? = null
 ) {
-    var rendererRef by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
-    var attachedTrack by remember { mutableStateOf<VideoTrack?>(null) }
+    val trackRef = remember { java.util.concurrent.atomic.AtomicReference<VideoTrack?>(null) }
     var isFirstFrameRendered by remember { mutableStateOf(false) }
     var showReconnectPrompt by remember { mutableStateOf(false) }
 
@@ -70,33 +69,6 @@ fun WebRtcVideoPlayer(
         }
     }
 
-    // Attach/detach track safely when track or renderer changes
-    LaunchedEffect(videoTrack, rendererRef) {
-        val renderer = rendererRef
-        if (renderer != null) {
-            if (attachedTrack != null && attachedTrack != videoTrack) {
-                try {
-                    attachedTrack?.removeSink(renderer)
-                    Log.d(TAG, "Removed old track sink")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error removing old sink: ${e.message}")
-                }
-                attachedTrack = null
-            }
-
-            if (videoTrack != null && attachedTrack != videoTrack) {
-                try {
-                    videoTrack.setEnabled(true)
-                    videoTrack.addSink(renderer)
-                    attachedTrack = videoTrack
-                    Log.d(TAG, "Attached VideoTrack ($videoTrack) to SurfaceViewRenderer")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error adding sink to videoTrack: ${e.message}")
-                }
-            }
-        }
-    }
-
     Box(
         modifier = modifier,
         contentAlignment = Alignment.Center
@@ -116,34 +88,42 @@ fun WebRtcVideoPlayer(
                     } catch (e: Exception) {
                         Log.e(TAG, "SurfaceViewRenderer init error: ${e.message}", e)
                     }
-                    rendererRef = this
                 }
             },
             update = { renderer ->
                 renderer.setMirror(isMirror)
+                val attachedTrack = trackRef.get()
                 if (videoTrack != null && attachedTrack != videoTrack) {
                     try {
                         attachedTrack?.removeSink(renderer)
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error removing old sink: ${e.message}")
+                    }
                     try {
                         videoTrack.setEnabled(true)
                         videoTrack.addSink(renderer)
-                        attachedTrack = videoTrack
+                        trackRef.set(videoTrack)
                         Log.d(TAG, "Attached VideoTrack in update block")
                     } catch (e: Exception) {
                         Log.e(TAG, "Error attaching sink in update: ${e.message}")
+                    }
+                } else if (videoTrack == null && attachedTrack != null) {
+                    try {
+                        attachedTrack.removeSink(renderer)
+                        trackRef.set(null)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error removing old sink: ${e.message}")
                     }
                 }
             },
             onRelease = { renderer ->
                 try {
-                    attachedTrack?.removeSink(renderer)
+                    trackRef.get()?.removeSink(renderer)
                 } catch (_: Exception) {}
                 try {
                     renderer.release()
                 } catch (_: Exception) {}
-                attachedTrack = null
-                rendererRef = null
+                trackRef.set(null)
                 isFirstFrameRendered = false
                 Log.d(TAG, "SurfaceViewRenderer released")
             }

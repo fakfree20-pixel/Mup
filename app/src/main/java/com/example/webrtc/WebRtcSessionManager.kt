@@ -21,19 +21,19 @@ class WebRtcSessionManager(
     companion object {
         @Volatile
         var isWebRtcInitialized = false
+
+        val rootEglBase: EglBase? by lazy {
+            try {
+                EglBase.create()
+            } catch (e: Throwable) {
+                android.util.Log.e("WebRtcSessionManager", "EglBase creation failed", e)
+                null
+            }
+        }
     }
     
     private val TAG = "WebRtcSessionManager"
 
-    // Root EGL Base for OpenGL hardware video textures
-    val rootEglBase: EglBase? by lazy {
-        try {
-            EglBase.create()
-        } catch (e: Throwable) {
-            android.util.Log.e("WebRtcSessionManager", "EglBase creation failed", e)
-            null
-        }
-    }
     val eglBase: EglBase? get() = rootEglBase
 
     private var peerConnectionFactory: PeerConnectionFactory? = null
@@ -249,7 +249,6 @@ class WebRtcSessionManager(
             _statusText.value = "Standby (Camera & Mic Off) - Waiting for viewer..."
             // Camera hardware remains OFF until the viewer connects
         } else {
-            setupViewerMediaTracks()
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
             _statusText.value = "Connecting to Camera..."
 
@@ -1076,8 +1075,6 @@ class WebRtcSessionManager(
 
                 peerConnectionFactory?.dispose()
                 peerConnectionFactory = null
-
-                rootEglBase?.release()
             } catch (e: Exception) {
                 Log.w(TAG, "Error releasing WebRTC resources", e)
             }
