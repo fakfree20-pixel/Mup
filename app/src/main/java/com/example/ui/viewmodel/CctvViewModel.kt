@@ -59,7 +59,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         private val exceptionHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, exception ->
             android.util.Log.e("CctvViewModel", "Unhandled background coroutine exception", exception)
         }
-        val backgroundScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob() + exceptionHandler)
+        val backgroundScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default + kotlinx.coroutines.SupervisorJob() + exceptionHandler)
     }
 
     private val TAG = "CctvViewModel"

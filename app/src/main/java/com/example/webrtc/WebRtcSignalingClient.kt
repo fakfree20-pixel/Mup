@@ -62,6 +62,7 @@ class WebRtcSignalingClient(
 
     private var mqttClient: MqttClient? = null
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+    private val outgoingHttpChannel = kotlinx.coroutines.channels.Channel<String>(kotlinx.coroutines.channels.Channel.BUFFERED)
 
     private fun isDuplicate(id: String): Boolean {
         synchronized(processedIds) {
@@ -110,6 +111,29 @@ class WebRtcSignalingClient(
             
             // 3. Start Fast HTTP Poll Fallback to guarantee 0 message drops
             launch { startHttpPollingLoop() }
+
+            // 4. Sequential Outgoing HTTPS Queue to prevent 429 Too Many Requests
+            launch {
+                for (jsonStr in outgoingHttpChannel) {
+                    if (!isRunning) break
+                    try {
+                        val postUrl = "https://ntfy.sh/$sendTopic"
+                        val body = jsonStr.toRequestBody(jsonMediaType)
+                        val request = Request.Builder()
+                            .url(postUrl)
+                            .post(body)
+                            .build()
+                        postClient.newCall(request).execute().use { response ->
+                            if (!response.isSuccessful) {
+                                Log.w(TAG, "HTTPS Post failed: ${response.code}")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error posting to HTTPS relay: ${e.message}")
+                    }
+                    delay(35) // Safe interval to avoid bursting ntfy.sh rate limits
+                }
+            }
         }
     }
 
@@ -160,8 +184,8 @@ class WebRtcSignalingClient(
      */
     private suspend fun startHttpPollingLoop() {
         val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=10s"
-        var cycle = 0
         while (isRunning) {
+            delay(3500L) // Moderate interval to avoid ntfy rate limits while SSE stream is active
             try {
                 val request = Request.Builder()
                     .url(pollUrl)
@@ -178,9 +202,6 @@ class WebRtcSignalingClient(
                     }
                 }
             } catch (_: Exception) {}
-            cycle++
-            // Poll gently as fallback without triggering ntfy rate-limits
-            delay(if (cycle < 10) 1500L else 3000L)
         }
     }
 
@@ -320,24 +341,8 @@ class WebRtcSignalingClient(
         }
         val jsonString = json.toString()
 
-        // 1. Send via HTTPS POST (Port 443 - 100% delivered through Saudi STC / India Airtel)
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val postUrl = "https://ntfy.sh/$sendTopic"
-                val body = jsonString.toRequestBody(jsonMediaType)
-                val request = Request.Builder()
-                    .url(postUrl)
-                    .post(body)
-                    .build()
-                postClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        Log.w(TAG, "HTTPS Post failed: ${response.code}")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error posting to HTTPS relay: ${e.message}")
-            }
-        }
+        // 1. Queue to sequential HTTPS channel (guaranteed delivery without 429 rate limits)
+        outgoingHttpChannel.trySend(jsonString)
 
         // 2. Also send via MQTT for instant real-time speed
         try {

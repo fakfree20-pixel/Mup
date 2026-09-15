@@ -62,6 +62,7 @@ class WebRtcSessionManager(
     private var signalingClient: WebRtcSignalingClient? = null
     private var currentRoomId: String = ""
     private var currentIsFrontCamera: Boolean = false
+    private var lastOfferTimestamp: Long = 0L
     private val executor = Executors.newSingleThreadExecutor()
 
     // Callbacks
@@ -276,12 +277,14 @@ class WebRtcSessionManager(
         // Background watchdog: retry if waiting for peer
         scope.launch(Dispatchers.IO) {
             var retryCount = 0
+            // Initial grace period of 4.5 seconds to allow initial handshake without interruption
+            delay(4500)
             while (scope.isActive) {
-                delay(2000)
+                delay(3500)
                 val state = _connectionState.value
                 if (state == WebRtcConnectionState.WAITING_PEER || state == WebRtcConnectionState.FAILED) {
                     retryCount++
-                    if (!isCameraMode) {
+                    if (!isCameraMode && retryCount <= 6) {
                         Log.d(TAG, "Watchdog ($retryCount): Sending ROOM_JOINED sync...")
                         signalingClient?.sendMessage(
                             SignalingMessage(
@@ -545,15 +548,15 @@ class WebRtcSessionManager(
                 videoCapturer?.let { capturer ->
                     capturer.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
                     try {
-                        capturer.startCapture(1280, 720, 30)
-                        Log.d(TAG, "Camera started at 1280x720 30fps")
+                        capturer.startCapture(640, 480, 30)
+                        Log.d(TAG, "Camera started at 640x480 30fps")
                     } catch (e1: Throwable) {
-                        Log.w(TAG, "1280x720 capture failed, trying 640x480: ${e1.message}")
+                        Log.w(TAG, "640x480 capture failed, trying 1280x720: ${e1.message}")
                         try {
-                            capturer.startCapture(640, 480, 30)
-                            Log.d(TAG, "Camera started at 640x480 30fps")
+                            capturer.startCapture(1280, 720, 30)
+                            Log.d(TAG, "Camera started at 1280x720 30fps")
                         } catch (e2: Throwable) {
-                            Log.w(TAG, "640x480 capture failed, trying 320x240: ${e2.message}")
+                            Log.w(TAG, "1280x720 capture failed, trying 320x240: ${e2.message}")
                             capturer.startCapture(320, 240, 15)
                             Log.d(TAG, "Camera started at 320x240 15fps")
                         }
@@ -682,12 +685,29 @@ class WebRtcSessionManager(
 
     private fun createCameraCapturer(isFront: Boolean): VideoCapturer? {
         val enumerators = mutableListOf<org.webrtc.CameraEnumerator>()
+        var useCamera2 = false
         try {
-            if (org.webrtc.Camera2Enumerator.isSupported(context)) {
-                enumerators.add(org.webrtc.Camera2Enumerator(context))
+            val cameraManager = context.getSystemService(android.content.Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
+            if (cameraManager != null && org.webrtc.Camera2Enumerator.isSupported(context)) {
+                val cameraIds = cameraManager.cameraIdList
+                if (cameraIds.isNotEmpty()) {
+                    val chars = cameraManager.getCameraCharacteristics(cameraIds[0])
+                    val level = chars.get(android.hardware.camera2.CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
+                    if (level != null && level != android.hardware.camera2.CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY) {
+                        useCamera2 = true
+                    }
+                }
             }
         } catch (e: Throwable) {
-            Log.w(TAG, "Camera2Enumerator check failed: ${e.message}")
+            Log.w(TAG, "Camera2 check failed: ${e.message}")
+        }
+
+        if (useCamera2) {
+            try {
+                enumerators.add(org.webrtc.Camera2Enumerator(context))
+            } catch (e: Throwable) {
+                Log.w(TAG, "Camera2Enumerator creation failed: ${e.message}")
+            }
         }
         try {
             // captureToTexture = true is required for SurfaceTextureHelper and hardware encoders
@@ -695,22 +715,48 @@ class WebRtcSessionManager(
         } catch (e: Throwable) {
             Log.w(TAG, "Camera1Enumerator creation failed: ${e.message}")
         }
+        if (!useCamera2 && org.webrtc.Camera2Enumerator.isSupported(context)) {
+            try {
+                enumerators.add(org.webrtc.Camera2Enumerator(context))
+            } catch (_: Throwable) {}
+        }
+
+        val cameraEventsHandler = object : CameraVideoCapturer.CameraEventsHandler {
+            override fun onCameraError(errorDescription: String?) {
+                Log.e(TAG, "Camera error event: $errorDescription")
+            }
+            override fun onCameraDisconnected() {
+                Log.w(TAG, "Camera disconnected event")
+            }
+            override fun onCameraFreezed(errorDescription: String?) {
+                Log.w(TAG, "Camera freezed event: $errorDescription")
+            }
+            override fun onCameraOpening(cameraName: String?) {
+                Log.d(TAG, "Camera opening: $cameraName")
+            }
+            override fun onFirstFrameAvailable() {
+                Log.d(TAG, "Camera first frame captured!")
+            }
+            override fun onCameraClosed() {
+                Log.d(TAG, "Camera closed")
+            }
+        }
         
         for (enumerator in enumerators) {
             try {
                 val deviceNames = enumerator.deviceNames
                 for (name in deviceNames) {
                     if (isFront && enumerator.isFrontFacing(name)) {
-                        val capturer = enumerator.createCapturer(name, null)
+                        val capturer = enumerator.createCapturer(name, cameraEventsHandler)
                         if (capturer != null) return capturer
                     }
                     if (!isFront && enumerator.isBackFacing(name)) {
-                        val capturer = enumerator.createCapturer(name, null)
+                        val capturer = enumerator.createCapturer(name, cameraEventsHandler)
                         if (capturer != null) return capturer
                     }
                 }
                 for (name in deviceNames) {
-                    val capturer = enumerator.createCapturer(name, null)
+                    val capturer = enumerator.createCapturer(name, cameraEventsHandler)
                     if (capturer != null) return capturer
                 }
             } catch (e: Throwable) {
@@ -733,6 +779,33 @@ class WebRtcSessionManager(
         })
     }
 
+    private fun preferCodec(sdp: String, codec: String): String {
+        try {
+            val lines = sdp.split("\r\n").toMutableList()
+            val mLineIndex = lines.indexOfFirst { it.startsWith("m=video") }
+            if (mLineIndex == -1) return sdp
+
+            val codecRtpMap = lines.firstOrNull { it.startsWith("a=rtpmap:") && it.contains(codec, ignoreCase = true) }
+                ?: return sdp
+
+            val payloadType = codecRtpMap.substringAfter("a=rtpmap:").substringBefore(" ").trim()
+            val mLine = lines[mLineIndex]
+            val parts = mLine.split(" ").toMutableList()
+            if (parts.size > 3) {
+                val header = parts.take(3)
+                val payloads = parts.drop(3).toMutableList()
+                if (payloads.remove(payloadType)) {
+                    payloads.add(0, payloadType)
+                    lines[mLineIndex] = (header + payloads).joinToString(" ")
+                }
+            }
+            return lines.joinToString("\r\n")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed prioritizing codec: ${e.message}")
+            return sdp
+        }
+    }
+
     private fun createAndSendOffer(roomId: String) {
         if (isCreatingOffer) return
         isCreatingOffer = true
@@ -744,6 +817,8 @@ class WebRtcSessionManager(
 
         peerConnection?.createOffer(object : SdpObserver {
             override fun onCreateSuccess(sessionDescription: SessionDescription) {
+                val preferredSdp = preferCodec(sessionDescription.description, "VP8")
+                val modifiedDesc = SessionDescription(sessionDescription.type, preferredSdp)
                 peerConnection?.setLocalDescription(object : SdpObserver {
                     override fun onCreateSuccess(p0: SessionDescription?) {}
                     override fun onSetSuccess() {
@@ -756,7 +831,7 @@ class WebRtcSessionManager(
                             type = "OFFER",
                             senderId = "CAMERA",
                             targetRoom = roomId.ifBlank { currentRoomId },
-                            sdp = sessionDescription.description,
+                            sdp = preferredSdp,
                             sdpType = sessionDescription.type.canonicalForm()
                         )
                         signalingClient?.sendMessage(msg)
@@ -771,7 +846,7 @@ class WebRtcSessionManager(
                         isNegotiating = false
                         Log.e(TAG, "SetLocalDescription failed: $p0")
                     }
-                }, sessionDescription)
+                }, modifiedDesc)
             }
 
             override fun onSetSuccess() {}
@@ -870,6 +945,21 @@ class WebRtcSessionManager(
         when (msg.type) {
             "ROOM_JOINED", "START_STREAM", "VIEWER_CONNECT" -> {
                 if (isCameraMode) {
+                    val currentConn = _connectionState.value
+                    if (currentConn == WebRtcConnectionState.CONNECTED) {
+                        Log.d(TAG, "Viewer joined room, but camera already connected. Skipping reset.")
+                        return
+                    }
+                    if (isNegotiating || isCreatingOffer) {
+                        Log.d(TAG, "Viewer joined room, but camera already negotiating. Skipping duplicate reset.")
+                        return
+                    }
+                    val now = System.currentTimeMillis()
+                    if (now - lastOfferTimestamp < 3500) {
+                        Log.d(TAG, "Viewer joined room, but throttled (< 3.5s). Skipping duplicate reset.")
+                        return
+                    }
+                    lastOfferTimestamp = now
                     Log.d(TAG, "Viewer joined room, activating camera & sending fresh offer")
                     resetPeerConnectionForFreshOffer(scope, msg.targetRoom.ifBlank { currentRoomId })
                 }
@@ -990,6 +1080,8 @@ class WebRtcSessionManager(
 
         peerConnection?.createAnswer(object : SdpObserver {
             override fun onCreateSuccess(sessionDescription: SessionDescription) {
+                val preferredSdp = preferCodec(sessionDescription.description, "VP8")
+                val modifiedDesc = SessionDescription(sessionDescription.type, preferredSdp)
                 peerConnection?.setLocalDescription(object : SdpObserver {
                     override fun onCreateSuccess(p0: SessionDescription?) {}
                     override fun onSetSuccess() {
@@ -998,24 +1090,30 @@ class WebRtcSessionManager(
                             type = "ANSWER",
                             senderId = "VIEWER",
                             targetRoom = currentRoomId,
-                            sdp = sessionDescription.description,
+                            sdp = preferredSdp,
                             sdpType = sessionDescription.type.canonicalForm()
                         )
                         signalingClient?.sendMessage(msg)
                     }
 
-                    override fun onCreateFailure(p0: String?) {}
+                    override fun onCreateFailure(p0: String?) {
+                        isNegotiating = false
+                    }
                     override fun onSetFailure(err: String?) {
                         Log.e(TAG, "SetLocalDescription Answer failed: $err")
+                        isNegotiating = false
                     }
-                }, sessionDescription)
+                }, modifiedDesc)
             }
 
             override fun onSetSuccess() {}
             override fun onCreateFailure(err: String?) {
                 Log.e(TAG, "CreateAnswer failed: $err")
+                isNegotiating = false
             }
-            override fun onSetFailure(p0: String?) {}
+            override fun onSetFailure(p0: String?) {
+                isNegotiating = false
+            }
         }, sdpConstraints)
     }
 

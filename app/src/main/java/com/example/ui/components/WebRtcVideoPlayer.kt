@@ -45,8 +45,11 @@ fun WebRtcVideoPlayer(
             isFirstFrameRendered = false
             showReconnectPrompt = false
         } else {
-            // If frame doesn't render within 7 seconds, offer reconnect prompt
-            delay(7000)
+            // Auto-reveal surface after 2.5s once video track is attached
+            // so driver quirks don't keep the loading screen up permanently
+            delay(2500)
+            isFirstFrameRendered = true
+            delay(5000)
             if (!isFirstFrameRendered) {
                 showReconnectPrompt = true
             }
@@ -83,7 +86,7 @@ fun WebRtcVideoPlayer(
                         init(eglContext, rendererEvents)
                         setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
                         setMirror(isMirror)
-                        setEnableHardwareScaler(true)
+                        setEnableHardwareScaler(false)
                         Log.d(TAG, "SurfaceViewRenderer initialized with EglContext: $eglContext")
                     } catch (e: Exception) {
                         Log.e(TAG, "SurfaceViewRenderer init error: ${e.message}", e)
