@@ -1,7 +1,9 @@
 package com.example.ui.screens
 
 import android.app.Activity
+import android.view.WindowManager
 import android.widget.Toast
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -46,6 +48,16 @@ fun CameraModeScreen(
     val connectedViewers by viewModel.connectedViewersCount.collectAsState()
     val isVoiceFilterEnabled by viewModel.isVoiceFilterEnabled.collectAsState()
     val cameraTelemetry by viewModel.cameraTelemetry.collectAsState()
+    var isBlackScreenSaverActive by remember { mutableStateOf(false) }
+
+    // 1. Keep display awake so Android never suspends the camera hardware while operating
+    DisposableEffect(Unit) {
+        val activity = context as? Activity
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
     // Start background CCTV service immediately on entering this screen
     LaunchedEffect(Unit) {
@@ -334,6 +346,80 @@ fun CameraModeScreen(
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // 5. OLED Black Screen Saver (0% Screen Power / Anti-Burn-In)
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, CctvCardBorder, RoundedCornerShape(16.dp)),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = CctvCardBg.copy(alpha = 0.6f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF263238)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DarkMode,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = if (language == AppLanguage.HINDI) "🌙 ब्लैक स्क्रीन सेवर (बैटरी बचत)" else "🌙 Black Screen Saver",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (language == AppLanguage.HINDI)
+                                        "स्क्रीन पूरी तरह काली रहेगी और कैमरा चलता रहेगा (0% स्क्रीन बैटरी खर्च)।"
+                                    else
+                                        "Screen stays black to save battery while camera streams non-stop.",
+                                    fontSize = 12.sp,
+                                    color = CctvTextSecondary,
+                                    lineHeight = 16.sp
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Button(
+                            onClick = { isBlackScreenSaverActive = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF37474F)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text(
+                                text = if (language == AppLanguage.HINDI) "चालू करें" else "Enable",
+                                fontSize = 12.sp,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
             }
 
             // 4. Bottom Stop Camera Button
@@ -416,6 +502,39 @@ fun CameraModeScreen(
                                 Text(if (language == AppLanguage.HINDI) "रद्द करें" else "Cancel")
                             }
                         }
+                    )
+                }
+            }
+        }
+
+        if (isBlackScreenSaverActive) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .clickable { isBlackScreenSaverActive = false },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DarkMode,
+                        contentDescription = null,
+                        tint = Color.DarkGray,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = if (language == AppLanguage.HINDI)
+                            "🔒 ब्लैक स्क्रीन सेवर सक्रिय (0% डिस्प्ले बैटरी खर्च)\nकैमरा 24/7 चालू है\n\nस्क्रीन खोलने के लिए कहीं भी टैप करें"
+                        else
+                            "🔒 Black Screen Saver Active (0% display power)\nCamera is streaming 24/7\n\nTap anywhere to wake screen",
+                        color = Color.Gray,
+                        fontSize = 15.sp,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 22.sp
                     )
                 }
             }

@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -30,6 +31,7 @@ import kotlinx.coroutines.launch
 class CctvForegroundService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     companion object {
@@ -181,6 +183,18 @@ class CctvForegroundService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to acquire WakeLock", e)
         }
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            wifiLock = wifiManager?.createWifiLock(
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                "CctvCamera::StreamingWifiLock"
+            )?.apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to acquire WifiLock", e)
+        }
     }
 
     private fun releaseWakeLock() {
@@ -192,6 +206,15 @@ class CctvForegroundService : Service() {
             Log.e(TAG, "Failed to release WakeLock", e)
         }
         wakeLock = null
+
+        try {
+            if (wifiLock?.isHeld == true) {
+                wifiLock?.release()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to release WifiLock", e)
+        }
+        wifiLock = null
     }
 
     private fun createNotificationChannel() {

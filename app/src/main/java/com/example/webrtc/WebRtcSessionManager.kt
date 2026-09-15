@@ -457,7 +457,10 @@ class WebRtcSessionManager(
         peerConnection = peerConnectionFactory?.createPeerConnection(rtcConfig, observer)
 
         if (isCameraMode) {
-            val dcInit = DataChannel.Init().apply { ordered = true }
+            val dcInit = DataChannel.Init().apply {
+                ordered = false
+                maxRetransmits = 0
+            }
             dataChannel = peerConnection?.createDataChannel("cctv_commands", dcInit)
             dataChannel?.let { setupDataChannelListeners(it) }
         } else {
@@ -502,6 +505,11 @@ class WebRtcSessionManager(
         try {
             dataChannel?.let { dc ->
                 if (dc.state() == DataChannel.State.OPEN) {
+                    // Drop packet if network buffer has > 8KB queued (~250ms of audio)
+                    // This prevents queue buildup and guarantees real-time zero audio lag!
+                    if (dc.bufferedAmount() > 8192) {
+                        return
+                    }
                     val buffer = DataChannel.Buffer(java.nio.ByteBuffer.wrap(pcm), true)
                     dc.send(buffer)
                 }
@@ -861,11 +869,6 @@ class WebRtcSessionManager(
             Log.d(TAG, "Negotiation already in progress, ignoring duplicate ROOM_JOINED")
             return
         }
-        val currentState = _connectionState.value
-        if (currentState == WebRtcConnectionState.CONNECTED) {
-            Log.d(TAG, "Already connected (state=$currentState), ignoring duplicate ROOM_JOINED")
-            return
-        }
 
         isNegotiating = true
         _connectionState.value = WebRtcConnectionState.EXCHANGING_SDP
@@ -940,18 +943,13 @@ class WebRtcSessionManager(
         when (msg.type) {
             "ROOM_JOINED", "START_STREAM", "VIEWER_CONNECT" -> {
                 if (isCameraMode) {
-                    val currentConn = _connectionState.value
-                    if (currentConn == WebRtcConnectionState.CONNECTED && localVideoTrack != null) {
-                        Log.d(TAG, "Viewer joined room, but camera already connected with video. Skipping reset.")
-                        return
-                    }
                     if (isNegotiating || isCreatingOffer) {
                         Log.d(TAG, "Viewer joined room, but camera already negotiating. Skipping duplicate reset.")
                         return
                     }
                     val now = System.currentTimeMillis()
-                    if (now - lastOfferTimestamp < 2500) {
-                        Log.d(TAG, "Viewer joined room, but throttled (< 2.5s). Skipping duplicate reset.")
+                    if (now - lastOfferTimestamp < 1500) {
+                        Log.d(TAG, "Viewer joined room, but throttled (< 1.5s). Skipping duplicate reset.")
                         return
                     }
                     lastOfferTimestamp = now
@@ -1198,9 +1196,16 @@ class WebRtcSessionManager(
 
     fun pauseForPhoneCall() {
         if (!isCameraMode) return
-        Log.i(TAG, "Phone call / VoIP detected! Pausing camera hardware for zero disturbance.")
+        Log.i(TAG, "Phone call / VoIP detected! Temporarily pausing camera capture.")
         isCallPaused = true
-        stopCameraHardware()
+        try {
+            videoCapturer?.stopCapture()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping capturer for call: ${e.message}")
+        }
+        try {
+            localVideoTrack?.setEnabled(false)
+        } catch (_: Exception) {}
         try {
             sendCommand("PHONE_CALL_ACTIVE")
         } catch (_: Exception) {}
@@ -1211,17 +1216,14 @@ class WebRtcSessionManager(
         if (!isCameraMode || !isCallPaused) return
         Log.i(TAG, "Phone call / VoIP finished. Resuming camera.")
         isCallPaused = false
-        if (_connectionState.value == WebRtcConnectionState.CONNECTED) {
+        try {
+            localVideoTrack?.setEnabled(true)
+            videoCapturer?.startCapture(640, 480, 30)
+            sendCommand("PHONE_CALL_ENDED")
+        } catch (e: Exception) {
+            Log.w(TAG, "Error resuming capturer: ${e.message}")
             startCameraHardware(currentIsFrontCamera)
-            localVideoTrack?.let {
-                peerConnection?.addTrack(it, listOf("cctv_stream"))
-            }
-            try {
-                sendCommand("PHONE_CALL_ENDED")
-            } catch (_: Exception) {}
-            _statusText.value = "● Live Stream Connected"
-        } else {
-            _statusText.value = "💤 Standby (Camera & Mic Off) - Waiting for viewer..."
         }
+        _statusText.value = "● Live Stream Connected"
     }
 }

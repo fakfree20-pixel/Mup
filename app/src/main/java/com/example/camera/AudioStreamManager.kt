@@ -4,9 +4,11 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -148,12 +150,12 @@ class AudioStreamManager(private val context: Context) {
         audioRecord = null
     }
 
-    // Play incoming audio chunks on phone speaker (Two-way audio)
+    // Play incoming audio chunks on phone speaker (Two-way audio) with ultra-low latency
     fun playSpeakerAudio(pcmData: ByteArray) {
         try {
             if (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
                 val minBufferSize = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
-                val bufferSize = (minBufferSize * 2).coerceAtLeast(2048)
+                val bufferSize = minBufferSize.coerceAtLeast(1024)
 
                 val attributes = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -166,16 +168,33 @@ class AudioStreamManager(private val context: Context) {
                     .setChannelMask(CHANNEL_CONFIG_OUT)
                     .build()
 
-                audioTrack = AudioTrack(
-                    attributes,
-                    format,
-                    bufferSize,
-                    AudioTrack.MODE_STREAM,
-                    android.media.AudioManager.AUDIO_SESSION_ID_GENERATE
-                )
+                audioTrack = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    AudioTrack.Builder()
+                        .setAudioAttributes(attributes)
+                        .setAudioFormat(format)
+                        .setBufferSizeInBytes(bufferSize)
+                        .setTransferMode(AudioTrack.MODE_STREAM)
+                        .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                        .build()
+                } else {
+                    @Suppress("DEPRECATION")
+                    AudioTrack(
+                        attributes,
+                        format,
+                        bufferSize,
+                        AudioTrack.MODE_STREAM,
+                        AudioManager.AUDIO_SESSION_ID_GENERATE
+                    )
+                }
                 audioTrack?.play()
             }
-            audioTrack?.write(pcmData, 0, pcmData.size)
+
+            val track = audioTrack ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                track.write(pcmData, 0, pcmData.size, AudioTrack.WRITE_NON_BLOCKING)
+            } else {
+                track.write(pcmData, 0, pcmData.size)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error playing audio on speaker", e)
         }

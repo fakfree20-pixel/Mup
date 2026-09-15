@@ -1,7 +1,9 @@
 package com.example.ui.screens
 
 import android.Manifest
+import android.app.Activity
 import android.content.pm.PackageManager
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -88,24 +90,33 @@ fun ViewerModeScreen(
         onBackToSelection()
     }
     
+    // 1. Keep display awake while viewing live CCTV stream to prevent auto-screen turn off
+    DisposableEffect(Unit) {
+        val activity = context as? Activity
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    // 2. Lifecycle observer: NEVER disconnect when phone display turns off / locks!
+    // When display is turned back on (ON_RESUME / ON_START), seamlessly verify & resume stream.
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_START) {
-                // Pre-fill PIN if empty, but do NOT auto-connect into a trapped state
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_START || event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                // Pre-fill PIN if empty
                 if (viewModel.savedCameras.value.isNotEmpty() && viewModel.viewerRoomPinInput.value.isBlank()) {
                     val mostRecent = viewModel.savedCameras.value.first()
                     viewModel.setViewerRoomPinInput(mostRecent.cameraId)
                 }
-            } else if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
-                // When viewer app is put into background (home button pressed), disconnect so old phone turns off
-                viewModel.disconnectViewer()
+                // Automatically resume stream if connection dropped while screen was off
+                viewModel.reconnectViewerIfActive()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            viewModel.disconnectViewer()
         }
     }
 

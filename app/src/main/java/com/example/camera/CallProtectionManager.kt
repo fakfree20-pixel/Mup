@@ -34,12 +34,10 @@ class CallProtectionManager(
     }
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-    private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var isCallInProgress = false
     private var isMonitoring = false
-    private var monitorJob: Job? = null
     private var audioFocusRequest: AudioFocusRequest? = null
 
     // Audio focus change listener: Android calls this when WhatsApp, IMO, or Phone requests audio focus
@@ -55,29 +53,6 @@ class CallProtectionManager(
             AudioManager.AUDIOFOCUS_GAIN -> {
                 Log.i(TAG, "Audio focus regained (Call finished). Resuming CCTV stream.")
                 handleCallEnded()
-            }
-        }
-    }
-
-    // Camera availability callback: triggered if another app (e.g. WhatsApp video call) accesses the camera
-    private val cameraAvailabilityCallback = object : CameraManager.AvailabilityCallback() {
-        override fun onCameraUnavailable(cameraId: String) {
-            super.onCameraUnavailable(cameraId)
-            Log.d(TAG, "Camera $cameraId unavailable (possibly opened by WhatsApp/IMO video call)")
-            val mode = audioManager?.mode ?: AudioManager.MODE_NORMAL
-            if (mode != AudioManager.MODE_NORMAL) {
-                handleCallStarted()
-            }
-        }
-
-        override fun onCameraAvailable(cameraId: String) {
-            super.onCameraAvailable(cameraId)
-            Log.d(TAG, "Camera $cameraId available again")
-            if (isCallInProgress) {
-                val mode = audioManager?.mode ?: AudioManager.MODE_NORMAL
-                if (mode == AudioManager.MODE_NORMAL) {
-                    handleCallEnded()
-                }
             }
         }
     }
@@ -109,47 +84,12 @@ class CallProtectionManager(
         // 1. Request transient audio focus with listener so WhatsApp/IMO triggers AUDIOFOCUS_LOSS
         requestAudioFocus()
 
-        // 2. Register camera availability callback
-        try {
-            cameraManager?.registerAvailabilityCallback(cameraAvailabilityCallback, mainHandler)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to register camera availability callback: ${e.message}")
-        }
-
-        // 3. Register phone state receiver
+        // 2. Register phone state receiver for GSM cellular calls
         try {
             val filter = IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
             context.registerReceiver(phoneStateReceiver, filter)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to register phone state receiver: ${e.message}")
-        }
-
-        // 4. Background polling of AudioManager.mode every 500ms
-        // WhatsApp & IMO switch audioManager.mode to MODE_IN_COMMUNICATION (3) or MODE_RINGTONE (2)
-        monitorJob = scope.launch(Dispatchers.IO) {
-            while (isActive && isMonitoring) {
-                delay(500)
-                val mode = audioManager?.mode ?: AudioManager.MODE_NORMAL
-                val isVoipOrCallActive = (mode == AudioManager.MODE_IN_COMMUNICATION ||
-                                          mode == AudioManager.MODE_IN_CALL ||
-                                          mode == AudioManager.MODE_RINGTONE)
-
-                if (isVoipOrCallActive && !isCallInProgress) {
-                    Log.i(TAG, "Active call/VoIP detected (audioManager.mode=$mode). Pausing camera & mic.")
-                    withContext(Dispatchers.Main) {
-                        handleCallStarted()
-                    }
-                } else if (!isVoipOrCallActive && isCallInProgress) {
-                    delay(700) // Brief grace period for mode transition
-                    val currentMode = audioManager?.mode ?: AudioManager.MODE_NORMAL
-                    if (currentMode == AudioManager.MODE_NORMAL) {
-                        Log.i(TAG, "Call finished (audioManager.mode returned to NORMAL). Resuming stream.")
-                        withContext(Dispatchers.Main) {
-                            handleCallEnded()
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -223,11 +163,6 @@ class CallProtectionManager(
 
     fun stopMonitoring() {
         isMonitoring = false
-        monitorJob?.cancel()
-        monitorJob = null
-        try {
-            cameraManager?.unregisterAvailabilityCallback(cameraAvailabilityCallback)
-        } catch (_: Exception) {}
         try {
             context.unregisterReceiver(phoneStateReceiver)
         } catch (_: Exception) {}

@@ -239,6 +239,9 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
     private val _viewerRoomPinInput = MutableStateFlow("")
     val viewerRoomPinInput: StateFlow<String> = _viewerRoomPinInput
 
+    private var _lastConnectedPin: String? = null
+    val lastConnectedPin: String? get() = _lastConnectedPin
+
     private val _discoveredCameras = MutableStateFlow<List<DiscoveredCamera>>(emptyList())
     val discoveredCameras: StateFlow<List<DiscoveredCamera>> = _discoveredCameras
 
@@ -845,7 +848,8 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        disconnectViewer()
+        disconnectWebRtc()
+        _lastConnectedPin = cleanPin
         
         _isViewerWebRtcActive.value = true
         _webRtcStatus.value = "Connecting to Room $cleanPin on 4G/5G..."
@@ -1038,7 +1042,26 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun reconnectViewerIfActive() {
+        val pin = _lastConnectedPin ?: return
+        val currentSession = _viewerWebRtcSession.value
+        val currentState = _viewerConnectionState.value
+        
+        // If already connected and playing, do not reconnect or interrupt
+        if (currentSession != null && currentState == WebRtcConnectionState.CONNECTED) {
+            Log.d(TAG, "reconnectViewerIfActive: Already CONNECTED, continuing playback")
+            return
+        }
+        
+        // If connection was dropped while screen was off, auto-reconnect
+        if (currentState == WebRtcConnectionState.DISCONNECTED || currentState == WebRtcConnectionState.FAILED) {
+            Log.i(TAG, "Screen woke up with dropped connection. Auto-reconnecting to PIN $pin")
+            connectWebRtc(pin)
+        }
+    }
+
     fun disconnectViewer() {
+        _lastConnectedPin = null
         disconnectWebRtc()
         viewModelScope.launch {
             try {
