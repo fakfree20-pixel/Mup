@@ -126,12 +126,15 @@ class WebRtcSignalingClient(
                         postClient.newCall(request).execute().use { response ->
                             if (!response.isSuccessful) {
                                 Log.w(TAG, "HTTPS Post failed: ${response.code}")
+                                if (response.code == 429) {
+                                    delay(1000)
+                                }
                             }
                         }
                     } catch (e: Exception) {
                         Log.w(TAG, "Error posting to HTTPS relay: ${e.message}")
                     }
-                    delay(35) // Safe interval to avoid bursting ntfy.sh rate limits
+                    delay(40) // Safe interval to avoid bursting ntfy.sh rate limits
                 }
             }
         }
@@ -183,9 +186,9 @@ class WebRtcSignalingClient(
      * Fast poll fallback: polls every 600ms during handshake for instant sub-second connection
      */
     private suspend fun startHttpPollingLoop() {
-        val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=10s"
+        val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=25s"
         while (isRunning) {
-            delay(3500L) // Moderate interval to avoid ntfy rate limits while SSE stream is active
+            delay(1500L) // Responsive poll interval to guarantee zero dropped signaling messages
             try {
                 val request = Request.Builder()
                     .url(pollUrl)

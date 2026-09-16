@@ -1,9 +1,13 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.util.Log
 import androidx.camera.view.PreviewView
 import androidx.lifecycle.AndroidViewModel
@@ -29,6 +33,7 @@ import com.example.ui.strings.AppLanguage
 import com.example.webrtc.WebRtcConnectionState
 import com.example.webrtc.WebRtcSessionManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -464,6 +469,9 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 ).apply {
                     onCommandReceived = { action ->
                         handleRemoteCommand(action, lifecycleOwner, previewView)
+                    }
+                    onAudioDataReceived = { pcm ->
+                        audioStreamManager.playSpeakerAudio(pcm)
                     }
                     onViewerConnected = {
                         _connectedViewersCount.value = 1
@@ -1092,15 +1100,100 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         sendRemoteCommand("TOGGLE_MIC")
     }
 
-    fun toggleViewerMic() {
+    private var viewerTalkJob: Job? = null
+    private var viewerAudioRecord: AudioRecord? = null
+
+    @SuppressLint("MissingPermission")
+    fun startViewerTalk() {
+        if (_isViewerMicTalking.value) return
+        _isViewerMicTalking.value = true
+
+        sendRemoteCommand("SET_SPEAKERPHONE:1")
+
+        if (cctvClient.isConnected.value) {
+            cctvClient.startTwoWayTalk(viewModelScope)
+        }
+
         if (_isViewerWebRtcActive.value && viewerWebRtcSession != null) {
-            val newState = !_isViewerMicTalking.value
-            _isViewerMicTalking.value = newState
-            viewerWebRtcSession?.enableViewerTwoWayAudio(newState)
-            sendRemoteCommand(if (newState) "SET_SPEAKERPHONE:1" else "SET_SPEAKERPHONE:0")
-            showToast(if (newState) "🗣️ Mic ON (Camera Speaker ON)" else "🔇 Mic OFF (Camera Speaker OFF)")
+            viewerWebRtcSession?.enableViewerTwoWayAudio(true)
+            viewerTalkJob = viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val sampleRate = 16000
+                    val minBuffer = AudioRecord.getMinBufferSize(
+                        sampleRate,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT
+                    )
+                    val bufferSize = minBuffer.coerceAtLeast(2048)
+                    var record = AudioRecord(
+                        MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                        sampleRate,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        bufferSize
+                    )
+                    if (record.state != AudioRecord.STATE_INITIALIZED) {
+                        record = AudioRecord(
+                            MediaRecorder.AudioSource.MIC,
+                            sampleRate,
+                            AudioFormat.CHANNEL_IN_MONO,
+                            AudioFormat.ENCODING_PCM_16BIT,
+                            bufferSize
+                        )
+                    }
+
+                    if (record.state == AudioRecord.STATE_INITIALIZED) {
+                        viewerAudioRecord = record
+                        record.startRecording()
+                        val buffer = ByteArray(1024)
+                        while (isActive && _isViewerMicTalking.value) {
+                            val read = record.read(buffer, 0, buffer.size)
+                            if (read > 0) {
+                                val chunk = buffer.copyOf(read)
+                                viewerWebRtcSession?.sendAudioData(chunk)
+                            }
+                            delay(20)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Viewer talk error: ${e.message}")
+                } finally {
+                    try {
+                        viewerAudioRecord?.stop()
+                        viewerAudioRecord?.release()
+                    } catch (_: Exception) {}
+                    viewerAudioRecord = null
+                }
+            }
+        }
+
+        val msg = if (_language.value == AppLanguage.HINDI) "🗣️ टूवे ऑडियो चालू - बोलें (कैमरा पर आवाज जा रही है)" else "🗣️ Two-Way Audio ON - Speak"
+        showToast(msg)
+    }
+
+    fun stopViewerTalk() {
+        _isViewerMicTalking.value = false
+        viewerTalkJob?.cancel()
+        viewerTalkJob = null
+        try {
+            viewerAudioRecord?.stop()
+            viewerAudioRecord?.release()
+        } catch (_: Exception) {}
+        viewerAudioRecord = null
+
+        viewerWebRtcSession?.enableViewerTwoWayAudio(false)
+        cctvClient.stopTwoWayTalk()
+        sendRemoteCommand("SET_SPEAKERPHONE:0")
+
+        val msg = if (_language.value == AppLanguage.HINDI) "🔇 टूवे ऑडियो बंद" else "🔇 Two-Way Audio OFF"
+        showToast(msg)
+    }
+
+    fun toggleViewerMic() {
+        if (_isViewerMicTalking.value) {
+            stopViewerTalk()
         } else {
-            cctvClient.toggleTwoWayTalk(viewModelScope)
+            startViewerTalk()
         }
     }
 

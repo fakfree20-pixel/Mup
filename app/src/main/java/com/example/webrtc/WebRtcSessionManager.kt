@@ -247,8 +247,10 @@ class WebRtcSessionManager(
 
         if (isCameraMode) {
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
-            _statusText.value = "💤 Standby (Camera & Mic Off) - Waiting for viewer..."
-            // Camera hardware and microphone remain completely OFF until a viewer connects!
+            _statusText.value = "Camera Active - Waiting for viewer..."
+            executor.submit {
+                startCameraHardware(isFrontCamera)
+            }
         } else {
             _connectionState.value = WebRtcConnectionState.WAITING_PEER
             _statusText.value = "Connecting to Camera..."
@@ -463,8 +465,6 @@ class WebRtcSessionManager(
             }
             dataChannel = peerConnection?.createDataChannel("cctv_commands", dcInit)
             dataChannel?.let { setupDataChannelListeners(it) }
-        } else {
-            setupViewerMediaTracks()
         }
     }
 
@@ -812,15 +812,10 @@ class WebRtcSessionManager(
         if (isCreatingOffer) return
         isCreatingOffer = true
 
-        val sdpConstraints = MediaConstraints().apply {
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-        }
+        val sdpConstraints = MediaConstraints()
 
         peerConnection?.createOffer(object : SdpObserver {
             override fun onCreateSuccess(sessionDescription: SessionDescription) {
-                val preferredSdp = preferCodec(sessionDescription.description, "VP8")
-                val modifiedDesc = SessionDescription(sessionDescription.type, preferredSdp)
                 peerConnection?.setLocalDescription(object : SdpObserver {
                     override fun onCreateSuccess(p0: SessionDescription?) {}
                     override fun onSetSuccess() {
@@ -829,14 +824,23 @@ class WebRtcSessionManager(
                         _connectionState.value = WebRtcConnectionState.EXCHANGING_SDP
                         _statusText.value = "Offer sent. Waiting for Viewer..."
 
-                        val msg = SignalingMessage(
-                            type = "OFFER",
-                            senderId = "CAMERA",
-                            targetRoom = roomId.ifBlank { currentRoomId },
-                            sdp = preferredSdp,
-                            sdpType = sessionDescription.type.canonicalForm()
-                        )
-                        signalingClient?.sendMessage(msg)
+                        executor.submit {
+                            val startGather = System.currentTimeMillis()
+                            while (peerConnection?.iceGatheringState() != PeerConnection.IceGatheringState.COMPLETE &&
+                                   System.currentTimeMillis() - startGather < 750) {
+                                try { Thread.sleep(50) } catch (_: Exception) {}
+                            }
+
+                            val fullSdp = peerConnection?.localDescription?.description ?: sessionDescription.description
+                            val msg = SignalingMessage(
+                                type = "OFFER",
+                                senderId = "CAMERA",
+                                targetRoom = roomId.ifBlank { currentRoomId },
+                                sdp = fullSdp,
+                                sdpType = "offer"
+                            )
+                            signalingClient?.sendMessage(msg)
+                        }
                     }
 
                     override fun onCreateFailure(p0: String?) {
@@ -848,7 +852,7 @@ class WebRtcSessionManager(
                         isNegotiating = false
                         Log.e(TAG, "SetLocalDescription failed: $p0")
                     }
-                }, modifiedDesc)
+                }, sessionDescription)
             }
 
             override fun onSetSuccess() {}
@@ -1069,27 +1073,31 @@ class WebRtcSessionManager(
     }
 
     private fun createAndSendAnswer() {
-        val sdpConstraints = MediaConstraints().apply {
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-        }
+        val sdpConstraints = MediaConstraints()
 
         peerConnection?.createAnswer(object : SdpObserver {
             override fun onCreateSuccess(sessionDescription: SessionDescription) {
-                val preferredSdp = preferCodec(sessionDescription.description, "VP8")
-                val modifiedDesc = SessionDescription(sessionDescription.type, preferredSdp)
                 peerConnection?.setLocalDescription(object : SdpObserver {
                     override fun onCreateSuccess(p0: SessionDescription?) {}
                     override fun onSetSuccess() {
                         Log.d(TAG, "SetLocalDescription success (Answer)")
-                        val msg = SignalingMessage(
-                            type = "ANSWER",
-                            senderId = "VIEWER",
-                            targetRoom = currentRoomId,
-                            sdp = preferredSdp,
-                            sdpType = sessionDescription.type.canonicalForm()
-                        )
-                        signalingClient?.sendMessage(msg)
+                        executor.submit {
+                            val startGather = System.currentTimeMillis()
+                            while (peerConnection?.iceGatheringState() != PeerConnection.IceGatheringState.COMPLETE &&
+                                   System.currentTimeMillis() - startGather < 600) {
+                                try { Thread.sleep(50) } catch (_: Exception) {}
+                            }
+
+                            val fullSdp = peerConnection?.localDescription?.description ?: sessionDescription.description
+                            val msg = SignalingMessage(
+                                type = "ANSWER",
+                                senderId = "VIEWER",
+                                targetRoom = currentRoomId,
+                                sdp = fullSdp,
+                                sdpType = "answer"
+                            )
+                            signalingClient?.sendMessage(msg)
+                        }
                     }
 
                     override fun onCreateFailure(p0: String?) {
@@ -1099,7 +1107,7 @@ class WebRtcSessionManager(
                         Log.e(TAG, "SetLocalDescription Answer failed: $err")
                         isNegotiating = false
                     }
-                }, modifiedDesc)
+                }, sessionDescription)
             }
 
             override fun onSetSuccess() {}
