@@ -287,6 +287,18 @@ class CctvClient {
         return newState
     }
 
+    fun sendAudioChunk(pcmChunk: ByteArray) {
+        if (!_isConnected.value || currentHost.isBlank() || currentPort == 0) return
+        try {
+            val body = pcmChunk.toRequestBody("application/octet-stream".toMediaType())
+            val request = Request.Builder()
+                .url("http://$currentHost:$currentPort/talk")
+                .post(body)
+                .build()
+            controlClient.newCall(request).execute().close()
+        } catch (_: Exception) {}
+    }
+
     @SuppressLint("MissingPermission")
     fun startTwoWayTalk(scope: CoroutineScope) {
         if (_isTwoWayTalkActive.value) return

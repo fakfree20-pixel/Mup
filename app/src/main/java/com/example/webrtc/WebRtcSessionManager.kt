@@ -458,13 +458,18 @@ class WebRtcSessionManager(
 
         peerConnection = peerConnectionFactory?.createPeerConnection(rtcConfig, observer)
 
-        if (isCameraMode) {
+        try {
             val dcInit = DataChannel.Init().apply {
+                negotiated = true
+                id = 1
                 ordered = false
                 maxRetransmits = 0
             }
             dataChannel = peerConnection?.createDataChannel("cctv_commands", dcInit)
             dataChannel?.let { setupDataChannelListeners(it) }
+            Log.d(TAG, "Configured negotiated DataChannel 'cctv_commands' with id=1 (isCamera=$isCameraMode)")
+        } catch (e: Exception) {
+            Log.w(TAG, "Error initializing DataChannel: ${e.message}")
         }
     }
 
@@ -490,8 +495,8 @@ class WebRtcSessionManager(
                     if (isCameraMode && (cmd == "VIEWER_DISCONNECT" || cmd == "STOP_STREAM")) {
                         Log.d(TAG, "Received VIEWER_DISCONNECT command via DataChannel, stopping camera hardware")
                         executor.submit { stopCameraHardware() }
-                    } else if (isCameraMode && cmd.startsWith("SET_SPEAKERPHONE:")) {
-                        val isOn = cmd.substringAfter("SET_SPEAKERPHONE:").trim() == "1"
+                    } else if (isCameraMode && (cmd.startsWith("SET_SPEAKERPHONE:") || cmd == "START_TALK" || cmd == "STOP_TALK")) {
+                        val isOn = if (cmd == "START_TALK") true else if (cmd == "STOP_TALK") false else cmd.substringAfter("SET_SPEAKERPHONE:").trim() == "1"
                         setSpeakerphoneEnabled(isOn)
                     }
                     
@@ -505,9 +510,7 @@ class WebRtcSessionManager(
         try {
             dataChannel?.let { dc ->
                 if (dc.state() == DataChannel.State.OPEN) {
-                    // Drop packet if network buffer has > 8KB queued (~250ms of audio)
-                    // This prevents queue buildup and guarantees real-time zero audio lag!
-                    if (dc.bufferedAmount() > 8192) {
+                    if (dc.bufferedAmount() > 16384) {
                         return
                     }
                     val buffer = DataChannel.Buffer(java.nio.ByteBuffer.wrap(pcm), true)
@@ -557,13 +560,13 @@ class WebRtcSessionManager(
                 videoCapturer?.let { capturer ->
                     capturer.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
                     try {
-                        capturer.startCapture(640, 480, 30)
-                        Log.d(TAG, "Camera started at 640x480 30fps")
+                        capturer.startCapture(640, 480, 24)
+                        Log.d(TAG, "Camera started at 640x480 24fps")
                     } catch (e1: Throwable) {
                         Log.w(TAG, "640x480 capture failed, trying 1280x720: ${e1.message}")
                         try {
-                            capturer.startCapture(1280, 720, 30)
-                            Log.d(TAG, "Camera started at 1280x720 30fps")
+                            capturer.startCapture(1280, 720, 24)
+                            Log.d(TAG, "Camera started at 1280x720 24fps")
                         } catch (e2: Throwable) {
                             Log.w(TAG, "1280x720 capture failed, trying 320x240: ${e2.message}")
                             capturer.startCapture(320, 240, 15)
@@ -716,23 +719,35 @@ class WebRtcSessionManager(
 
         val enumerators = mutableListOf<org.webrtc.CameraEnumerator>()
 
-        // 1. Check Camera2 support
-        if (org.webrtc.Camera2Enumerator.isSupported(context)) {
+        // For Android 10+ (API 29+), try Camera2 first with Camera1 fallback.
+        // For Android 9 and older, Camera1 with hardware texture capture is vastly more reliable.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q && org.webrtc.Camera2Enumerator.isSupported(context)) {
             try {
                 enumerators.add(org.webrtc.Camera2Enumerator(context))
             } catch (e: Throwable) {
                 Log.w(TAG, "Camera2Enumerator failed: ${e.message}")
             }
+            try {
+                enumerators.add(org.webrtc.Camera1Enumerator(true))
+            } catch (e: Throwable) {
+                Log.w(TAG, "Camera1Enumerator (texture) failed: ${e.message}")
+            }
+        } else {
+            try {
+                enumerators.add(org.webrtc.Camera1Enumerator(true))
+            } catch (e: Throwable) {
+                Log.w(TAG, "Camera1Enumerator (texture) failed: ${e.message}")
+            }
+            if (org.webrtc.Camera2Enumerator.isSupported(context)) {
+                try {
+                    enumerators.add(org.webrtc.Camera2Enumerator(context))
+                } catch (e: Throwable) {
+                    Log.w(TAG, "Camera2Enumerator failed: ${e.message}")
+                }
+            }
         }
 
-        // 2. Camera1 with texture capture
-        try {
-            enumerators.add(org.webrtc.Camera1Enumerator(true))
-        } catch (e: Throwable) {
-            Log.w(TAG, "Camera1Enumerator (texture) failed: ${e.message}")
-        }
-
-        // 3. Camera1 without texture capture (raw buffer fallback for older phones)
+        // Camera1 without texture capture (raw buffer fallback for older phones)
         try {
             enumerators.add(org.webrtc.Camera1Enumerator(false))
         } catch (e: Throwable) {
@@ -831,7 +846,8 @@ class WebRtcSessionManager(
                                 try { Thread.sleep(50) } catch (_: Exception) {}
                             }
 
-                            val fullSdp = peerConnection?.localDescription?.description ?: sessionDescription.description
+                            val rawSdp = peerConnection?.localDescription?.description ?: sessionDescription.description
+                            val fullSdp = preferCodec(rawSdp, "VP8")
                             val msg = SignalingMessage(
                                 type = "OFFER",
                                 senderId = "CAMERA",
@@ -1088,7 +1104,8 @@ class WebRtcSessionManager(
                                 try { Thread.sleep(50) } catch (_: Exception) {}
                             }
 
-                            val fullSdp = peerConnection?.localDescription?.description ?: sessionDescription.description
+                            val rawSdp = peerConnection?.localDescription?.description ?: sessionDescription.description
+                            val fullSdp = preferCodec(rawSdp, "VP8")
                             val msg = SignalingMessage(
                                 type = "ANSWER",
                                 senderId = "VIEWER",

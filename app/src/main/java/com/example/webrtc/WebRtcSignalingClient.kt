@@ -88,20 +88,22 @@ class WebRtcSignalingClient(
 
         job = scope.launch(Dispatchers.IO) {
             // Immediate initial fetch to catch messages instantly without waiting
-            try {
-                val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=15s"
-                val request = Request.Builder().url(pollUrl).build()
-                postClient.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        val body = response.body?.string()
-                        if (!body.isNullOrEmpty()) {
-                            for (l in body.split("\n")) {
-                                handleIncomingStreamLine(l)
+            launch {
+                try {
+                    val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=15s"
+                    val request = Request.Builder().url(pollUrl).build()
+                    postClient.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val body = response.body?.string()
+                            if (!body.isNullOrEmpty()) {
+                                for (l in body.split("\n")) {
+                                    handleIncomingStreamLine(l)
+                                }
                             }
                         }
                     }
-                }
-            } catch (_: Exception) {}
+                } catch (_: Exception) {}
+            }
 
             // 1. Start MQTT/MQTTS in parallel for sub-50ms peer signaling
             launch { startMqttLoop() }
@@ -114,11 +116,12 @@ class WebRtcSignalingClient(
 
             // 4. Sequential Outgoing HTTPS Queue to prevent 429 Too Many Requests
             launch {
+                val textMediaType = "text/plain; charset=utf-8".toMediaType()
                 for (jsonStr in outgoingHttpChannel) {
                     if (!isRunning) break
                     try {
                         val postUrl = "https://ntfy.sh/$sendTopic"
-                        val body = jsonStr.toRequestBody(jsonMediaType)
+                        val body = jsonStr.toRequestBody(textMediaType)
                         val request = Request.Builder()
                             .url(postUrl)
                             .post(body)
@@ -134,7 +137,7 @@ class WebRtcSignalingClient(
                     } catch (e: Exception) {
                         Log.w(TAG, "Error posting to HTTPS relay: ${e.message}")
                     }
-                    delay(40) // Safe interval to avoid bursting ntfy.sh rate limits
+                    delay(30) // Safe interval to avoid bursting ntfy.sh rate limits
                 }
             }
         }
@@ -239,7 +242,11 @@ class WebRtcSignalingClient(
                 val messageContent = json.optString("message")
                 if (messageContent.isNotEmpty()) {
                     parseAndDispatch(messageContent)
+                } else if (json.has("type")) {
+                    parseAndDispatch(line)
                 }
+            } else if (json.has("type")) {
+                parseAndDispatch(line)
             }
         } catch (e: Exception) {
             // Direct json payload fallback

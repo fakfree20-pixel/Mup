@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
@@ -86,7 +87,8 @@ fun WebRtcVideoPlayer(
                         init(eglContext, rendererEvents)
                         setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
                         setMirror(isMirror)
-                        setEnableHardwareScaler(false)
+                        setEnableHardwareScaler(true)
+                        setZOrderMediaOverlay(true)
                         Log.d(TAG, "SurfaceViewRenderer initialized with EglContext: $eglContext")
                     } catch (e: Exception) {
                         Log.e(TAG, "SurfaceViewRenderer init error: ${e.message}", e)
@@ -123,12 +125,14 @@ fun WebRtcVideoPlayer(
                 try {
                     trackRef.get()?.removeSink(renderer)
                 } catch (_: Exception) {}
-                try {
-                    renderer.release()
-                } catch (_: Exception) {}
                 trackRef.set(null)
                 isFirstFrameRendered = false
-                Log.d(TAG, "SurfaceViewRenderer released")
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    try {
+                        renderer.release()
+                    } catch (_: Exception) {}
+                }
+                Log.d(TAG, "SurfaceViewRenderer released asynchronously")
             }
         )
 

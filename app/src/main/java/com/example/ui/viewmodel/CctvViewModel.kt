@@ -688,11 +688,16 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 "Snapshot taken"
             }
-            action.startsWith("SET_SPEAKERPHONE:") -> {
-                val isOn = action.substringAfter("SET_SPEAKERPHONE:").trim() == "1"
+            action == "START_TALK" || action.startsWith("SET_SPEAKERPHONE:") -> {
+                val isOn = if (action == "START_TALK") true else action.substringAfter("SET_SPEAKERPHONE:").trim() == "1"
                 _isSpeakerphoneOn.value = isOn
                 cameraWebRtcSession?.setSpeakerphoneEnabled(isOn)
                 "Speakerphone set to $isOn"
+            }
+            action == "STOP_TALK" -> {
+                _isSpeakerphoneOn.value = false
+                cameraWebRtcSession?.setSpeakerphoneEnabled(false)
+                "Speakerphone set to false"
             }
             action == "GET_TELEMETRY" -> {
                 broadcastCurrentTelemetry()
@@ -1108,66 +1113,70 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         if (_isViewerMicTalking.value) return
         _isViewerMicTalking.value = true
 
-        sendRemoteCommand("SET_SPEAKERPHONE:1")
+        viewerTalkJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                sendRemoteCommand("START_TALK")
+                sendRemoteCommand("SET_SPEAKERPHONE:1")
+                viewerWebRtcSession?.enableViewerTwoWayAudio(true)
 
-        if (cctvClient.isConnected.value) {
-            cctvClient.startTwoWayTalk(viewModelScope)
-        }
-
-        if (_isViewerWebRtcActive.value && viewerWebRtcSession != null) {
-            viewerWebRtcSession?.enableViewerTwoWayAudio(true)
-            viewerTalkJob = viewModelScope.launch(Dispatchers.IO) {
+                val sampleRate = 16000
+                val minBuffer = AudioRecord.getMinBufferSize(
+                    sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT
+                )
+                val bufferSize = minBuffer.coerceAtLeast(2048)
+                var record: AudioRecord? = null
                 try {
-                    val sampleRate = 16000
-                    val minBuffer = AudioRecord.getMinBufferSize(
-                        sampleRate,
-                        AudioFormat.CHANNEL_IN_MONO,
-                        AudioFormat.ENCODING_PCM_16BIT
-                    )
-                    val bufferSize = minBuffer.coerceAtLeast(2048)
-                    var record = AudioRecord(
+                    record = AudioRecord(
                         MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                         sampleRate,
                         AudioFormat.CHANNEL_IN_MONO,
                         AudioFormat.ENCODING_PCM_16BIT,
                         bufferSize
                     )
-                    if (record.state != AudioRecord.STATE_INITIALIZED) {
-                        record = AudioRecord(
-                            MediaRecorder.AudioSource.MIC,
-                            sampleRate,
-                            AudioFormat.CHANNEL_IN_MONO,
-                            AudioFormat.ENCODING_PCM_16BIT,
-                            bufferSize
-                        )
-                    }
+                } catch (_: Exception) {}
 
-                    if (record.state == AudioRecord.STATE_INITIALIZED) {
-                        viewerAudioRecord = record
-                        record.startRecording()
-                        val buffer = ByteArray(1024)
-                        while (isActive && _isViewerMicTalking.value) {
-                            val read = record.read(buffer, 0, buffer.size)
-                            if (read > 0) {
-                                val chunk = buffer.copyOf(read)
-                                viewerWebRtcSession?.sendAudioData(chunk)
+                if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
+                    try { record?.release() } catch (_: Exception) {}
+                    record = AudioRecord(
+                        MediaRecorder.AudioSource.MIC,
+                        sampleRate,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        bufferSize
+                    )
+                }
+
+                if (record != null && record.state == AudioRecord.STATE_INITIALIZED) {
+                    viewerAudioRecord = record
+                    record.startRecording()
+                    val buffer = ByteArray(1024)
+                    while (isActive && _isViewerMicTalking.value) {
+                        val read = record.read(buffer, 0, buffer.size)
+                        if (read > 0) {
+                            val chunk = buffer.copyOf(read)
+                            // Send over WebRTC DataChannel (Primary low-latency)
+                            viewerWebRtcSession?.sendAudioData(chunk)
+                            // Only send over HTTP LAN endpoint if WebRTC is not active
+                            if (cctvClient.currentHost.isNotBlank() && !_isViewerWebRtcActive.value) {
+                                cctvClient.sendAudioChunk(chunk)
                             }
-                            delay(20)
                         }
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Viewer talk error: ${e.message}")
-                } finally {
-                    try {
-                        viewerAudioRecord?.stop()
-                        viewerAudioRecord?.release()
-                    } catch (_: Exception) {}
-                    viewerAudioRecord = null
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Viewer talk error: ${e.message}")
+            } finally {
+                try {
+                    viewerAudioRecord?.stop()
+                    viewerAudioRecord?.release()
+                } catch (_: Exception) {}
+                viewerAudioRecord = null
             }
         }
 
-        val msg = if (_language.value == AppLanguage.HINDI) "🗣️ टूवे ऑडियो चालू - बोलें (कैमरा पर आवाज जा रही है)" else "🗣️ Two-Way Audio ON - Speak"
+        val msg = if (_language.value == AppLanguage.HINDI) "🗣️ टूवे ऑडियो चालू - बोलें (कैमरा स्पीकर पर आवाज जा रही है)" else "🗣️ Two-Way Audio ON - Speak"
         showToast(msg)
     }
 
@@ -1175,15 +1184,17 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         _isViewerMicTalking.value = false
         viewerTalkJob?.cancel()
         viewerTalkJob = null
-        try {
-            viewerAudioRecord?.stop()
-            viewerAudioRecord?.release()
-        } catch (_: Exception) {}
-        viewerAudioRecord = null
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                viewerAudioRecord?.stop()
+                viewerAudioRecord?.release()
+            } catch (_: Exception) {}
+            viewerAudioRecord = null
 
-        viewerWebRtcSession?.enableViewerTwoWayAudio(false)
-        cctvClient.stopTwoWayTalk()
-        sendRemoteCommand("SET_SPEAKERPHONE:0")
+            viewerWebRtcSession?.enableViewerTwoWayAudio(false)
+            sendRemoteCommand("STOP_TALK")
+            sendRemoteCommand("SET_SPEAKERPHONE:0")
+        }
 
         val msg = if (_language.value == AppLanguage.HINDI) "🔇 टूवे ऑडियो बंद" else "🔇 Two-Way Audio OFF"
         showToast(msg)

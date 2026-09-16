@@ -77,13 +77,9 @@ fun ViewerModeScreen(
         }
     }
     
-    val isAnyConnected = isConnected || (isViewerWebRtcActive && webRtcSession != null)
-    val isAttemptingConnection = isConnecting || (isViewerWebRtcActive && (
-        webRtcConnState == WebRtcConnectionState.CONNECTING_SIGNALING ||
-        webRtcConnState == WebRtcConnectionState.WAITING_PEER ||
-        webRtcConnState == WebRtcConnectionState.EXCHANGING_SDP ||
-        webRtcConnState == WebRtcConnectionState.CONNECTING_P2P
-    ))
+    val isWebRtcConnected = isViewerWebRtcActive && (webRtcConnState == WebRtcConnectionState.CONNECTED || webRtcVideoTrack != null)
+    val isAnyConnected = isConnected || isWebRtcConnected
+    val isAttemptingConnection = isConnecting || (isViewerWebRtcActive && !isWebRtcConnected)
 
     androidx.activity.compose.BackHandler {
         viewModel.disconnectViewer()
@@ -344,67 +340,8 @@ fun ViewerModeScreen(
                         }
                     }
                 }
-                
-                // 3. PROMINENT TWO-WAY AUDIO TALK BUTTON (टूवे ऑडियो - बोलें)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Surface(
-                        onClick = {
-                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                                viewModel.toggleViewerMic()
-                            } else {
-                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                            }
-                        },
-                        shape = RoundedCornerShape(28.dp),
-                        color = if (isViewerMicOn) Color(0xFFDC2626) else Color(0xDD111827),
-                        border = androidx.compose.foundation.BorderStroke(
-                            if (isViewerMicOn) 2.dp else 1.5.dp,
-                            if (isViewerMicOn) Color(0xFFFCA5A5) else CctvSuccessGreen
-                        ),
-                        shadowElevation = if (isViewerMicOn) 12.dp else 4.dp
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = if (isViewerMicOn) Icons.Default.Mic else Icons.Default.MicNone,
-                                contentDescription = "Two-Way Audio",
-                                tint = Color.White,
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column {
-                                Text(
-                                    text = if (isViewerMicOn) {
-                                        if (language == AppLanguage.HINDI) "🗣️ बोल रहे हैं... (कैमरा पर आवाज जा रही है)" else "🗣️ Speaking... (Camera Speaker ON)"
-                                    } else {
-                                        if (language == AppLanguage.HINDI) "🎙️ टूवे ऑडियो (बोलने के लिए दबाएं)" else "🎙️ Two-Way Audio (Tap to Talk)"
-                                    },
-                                    color = Color.White,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = if (isViewerMicOn) {
-                                        if (language == AppLanguage.HINDI) "बंद करने के लिए दोबारा दबाएं" else "Tap again to mute"
-                                    } else {
-                                        if (language == AppLanguage.HINDI) "कैमरा फोन के स्पीकर पर आपकी आवाज जाएगी" else "Your voice plays on camera phone"
-                                    },
-                                    color = if (isViewerMicOn) Color(0xFFFED7AA) else Color(0xFF9CA3AF),
-                                    fontSize = 11.sp
-                                )
-                            }
-                        }
-                    }
-                }
 
-                // Secondary Controls Row (Torch, Switch Camera, Two-Way Mic, Audio Only, Speakerphone)
+                // Controls Row (Torch, Switch Camera, Two-Way Mic Talk, Audio Only, Speakerphone)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -432,7 +369,7 @@ fun ViewerModeScreen(
                         Icon(Icons.Default.Cameraswitch, contentDescription = "Switch Camera", tint = Color.White, modifier = Modifier.size(22.dp))
                     }
 
-                    // Two-Way Mic Quick Toggle
+                    // Two-Way Mic Talk Button (कैमरा पर बोलने के लिए)
                     IconButton(
                         onClick = {
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
@@ -442,14 +379,22 @@ fun ViewerModeScreen(
                             }
                         },
                         modifier = Modifier
-                            .size(46.dp)
-                            .background(if (isViewerMicOn) Color(0xFFDC2626) else Color(0x77000000), CircleShape)
+                            .size(52.dp)
+                            .background(
+                                if (isViewerMicOn) Color(0xFFDC2626) else Color(0x88000000),
+                                CircleShape
+                            )
+                            .border(
+                                width = if (isViewerMicOn) 2.dp else 1.dp,
+                                color = if (isViewerMicOn) Color(0xFFFCA5A5) else Color(0x44FFFFFF),
+                                shape = CircleShape
+                            )
                     ) {
                         Icon(
                             imageVector = if (isViewerMicOn) Icons.Default.Mic else Icons.Default.MicNone,
-                            contentDescription = "Two-Way Mic Quick Toggle",
+                            contentDescription = "Two-Way Audio Talk",
                             tint = Color.White,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(26.dp)
                         )
                     }
 

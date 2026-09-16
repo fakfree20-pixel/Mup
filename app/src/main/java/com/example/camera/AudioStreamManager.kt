@@ -155,10 +155,10 @@ class AudioStreamManager(private val context: Context) {
         try {
             if (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
                 val minBufferSize = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
-                val bufferSize = minBufferSize.coerceAtLeast(1024)
+                val bufferSize = minBufferSize.coerceAtLeast(2048)
 
                 val attributes = AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
 
@@ -186,6 +186,17 @@ class AudioStreamManager(private val context: Context) {
                         AudioManager.AUDIO_SESSION_ID_GENERATE
                     )
                 }
+
+                try {
+                    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                    audioManager.isSpeakerphoneOn = true
+                    val maxCallVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
+                    val maxMusicVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                    audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, maxCallVol, 0)
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxMusicVol, 0)
+                } catch (_: Exception) {}
+
                 audioTrack?.play()
             }
 
@@ -210,6 +221,10 @@ class AudioStreamManager(private val context: Context) {
             Log.e(TAG, "Error releasing audio track", e)
         }
         audioTrack = null
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audioManager.mode = AudioManager.MODE_NORMAL
+        } catch (_: Exception) {}
     }
 
     // Siren alarm generator
