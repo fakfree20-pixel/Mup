@@ -67,6 +67,8 @@ fun ViewerModeScreen(
 
     var showSecurityLockDialog by remember { mutableStateOf(false) }
     var securityPinInput by remember { mutableStateOf("") }
+    var connectionMode by remember { mutableStateOf("PIN") } // "PIN" or "IP"
+    var directIpInput by remember { mutableStateOf("") }
 
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
@@ -506,8 +508,8 @@ fun ViewerModeScreen(
                                 modifier = Modifier.padding(top = 4.dp)
                             )
 
-                            // Troubleshooting tips after 6 seconds
-                            if (connectionAttemptSeconds >= 6) {
+                            // Troubleshooting tips after 4 seconds
+                            if (connectionAttemptSeconds >= 4) {
                                 Spacer(modifier = Modifier.height(16.dp))
                                 Column(
                                     modifier = Modifier
@@ -541,7 +543,7 @@ fun ViewerModeScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                if (connectionAttemptSeconds >= 12) {
+                                if (connectionAttemptSeconds >= 4) {
                                     Button(
                                         onClick = { viewModel.connectWebRtc(roomPinInput) },
                                         modifier = Modifier.weight(1f).height(46.dp),
@@ -601,32 +603,89 @@ fun ViewerModeScreen(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = if (language == AppLanguage.HINDI) "पुराने फोन का 6-अंक रूम पिन डालें" else "Enter old phone's 6-digit Room PIN",
+                        text = if (language == AppLanguage.HINDI) "कनेक्शन का तरीका चुनें" else "Choose Connection Method",
                         fontSize = 14.sp,
                         color = Color.Gray
                     )
-                    Spacer(modifier = Modifier.height(24.dp))
-                    
-                    OutlinedTextField(
-                        value = roomPinInput,
-                        onValueChange = { viewModel.setViewerRoomPinInput(it) },
-                        label = { Text("Room PIN") },
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Mode Toggle Row
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color(0xFFCE93D8),
-                            unfocusedBorderColor = Color.Gray,
-                            cursorColor = Color(0xFFCE93D8)
-                        ),
-                        singleLine = true,
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
-                    )
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { connectionMode = "PIN" },
+                            modifier = Modifier.weight(1f).height(40.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = if (connectionMode == "PIN") Color(0xFF673AB7).copy(alpha = 0.3f) else Color.Transparent,
+                                contentColor = if (connectionMode == "PIN") Color(0xFFCE93D8) else Color.Gray
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (connectionMode == "PIN") Color(0xFFCE93D8) else Color.Gray)
+                        ) {
+                            Text(if (language == AppLanguage.HINDI) "🔑 रूम पिन" else "🔑 Room PIN", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        OutlinedButton(
+                            onClick = { connectionMode = "IP" },
+                            modifier = Modifier.weight(1f).height(40.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = if (connectionMode == "IP") Color(0xFF673AB7).copy(alpha = 0.3f) else Color.Transparent,
+                                contentColor = if (connectionMode == "IP") Color(0xFFCE93D8) else Color.Gray
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (connectionMode == "IP") Color(0xFFCE93D8) else Color.Gray)
+                        ) {
+                            Text(if (language == AppLanguage.HINDI) "🌐 वाई-फाई आईपी" else "🌐 Direct IP", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+                    
+                    if (connectionMode == "PIN") {
+                        OutlinedTextField(
+                            value = roomPinInput,
+                            onValueChange = { viewModel.setViewerRoomPinInput(it) },
+                            label = { Text(if (language == AppLanguage.HINDI) "रूम पिन (6 अंक)" else "Room PIN") },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color(0xFFCE93D8),
+                                unfocusedBorderColor = Color.Gray,
+                                cursorColor = Color(0xFFCE93D8)
+                            ),
+                            singleLine = true,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
+                        )
+                    } else {
+                        OutlinedTextField(
+                            value = directIpInput,
+                            onValueChange = { directIpInput = it },
+                            label = { Text(if (language == AppLanguage.HINDI) "आईपी एड्रेस (उदा. 192.168.1.5:8080)" else "IP Address (e.g. 192.168.1.5:8080)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color(0xFFCE93D8),
+                                unfocusedBorderColor = Color.Gray,
+                                cursorColor = Color(0xFFCE93D8)
+                            ),
+                            singleLine = true
+                        )
+                    }
                     
                     Spacer(modifier = Modifier.height(20.dp))
                     
                     Button(
-                        onClick = { viewModel.connectWebRtc(roomPinInput) },
+                        onClick = {
+                            if (connectionMode == "PIN") {
+                                viewModel.connectWebRtc(roomPinInput)
+                            } else {
+                                viewModel.connectToCamera(directIpInput)
+                            }
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(54.dp),

@@ -719,39 +719,27 @@ class WebRtcSessionManager(
 
         val enumerators = mutableListOf<org.webrtc.CameraEnumerator>()
 
-        // For Android 10+ (API 29+), try Camera2 first with Camera1 fallback.
-        // For Android 9 and older, Camera1 with hardware texture capture is vastly more reliable.
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q && org.webrtc.Camera2Enumerator.isSupported(context)) {
+        // 1. Camera1 without texture capture (raw buffer fallback) - 100% reliable on all old and new Android phones
+        try {
+            enumerators.add(org.webrtc.Camera1Enumerator(false))
+        } catch (e: Throwable) {
+            Log.w(TAG, "Camera1Enumerator (no texture) failed: ${e.message}")
+        }
+
+        // 2. Camera1 with texture capture
+        try {
+            enumerators.add(org.webrtc.Camera1Enumerator(true))
+        } catch (e: Throwable) {
+            Log.w(TAG, "Camera1Enumerator (texture) failed: ${e.message}")
+        }
+
+        // 3. Camera2 for modern devices
+        if (org.webrtc.Camera2Enumerator.isSupported(context)) {
             try {
                 enumerators.add(org.webrtc.Camera2Enumerator(context))
             } catch (e: Throwable) {
                 Log.w(TAG, "Camera2Enumerator failed: ${e.message}")
             }
-            try {
-                enumerators.add(org.webrtc.Camera1Enumerator(true))
-            } catch (e: Throwable) {
-                Log.w(TAG, "Camera1Enumerator (texture) failed: ${e.message}")
-            }
-        } else {
-            try {
-                enumerators.add(org.webrtc.Camera1Enumerator(true))
-            } catch (e: Throwable) {
-                Log.w(TAG, "Camera1Enumerator (texture) failed: ${e.message}")
-            }
-            if (org.webrtc.Camera2Enumerator.isSupported(context)) {
-                try {
-                    enumerators.add(org.webrtc.Camera2Enumerator(context))
-                } catch (e: Throwable) {
-                    Log.w(TAG, "Camera2Enumerator failed: ${e.message}")
-                }
-            }
-        }
-
-        // Camera1 without texture capture (raw buffer fallback for older phones)
-        try {
-            enumerators.add(org.webrtc.Camera1Enumerator(false))
-        } catch (e: Throwable) {
-            Log.w(TAG, "Camera1Enumerator (no texture) failed: ${e.message}")
         }
 
         for (enumerator in enumerators) {
@@ -842,8 +830,8 @@ class WebRtcSessionManager(
                         executor.submit {
                             val startGather = System.currentTimeMillis()
                             while (peerConnection?.iceGatheringState() != PeerConnection.IceGatheringState.COMPLETE &&
-                                   System.currentTimeMillis() - startGather < 750) {
-                                try { Thread.sleep(50) } catch (_: Exception) {}
+                                   System.currentTimeMillis() - startGather < 100) {
+                                try { Thread.sleep(20) } catch (_: Exception) {}
                             }
 
                             val rawSdp = peerConnection?.localDescription?.description ?: sessionDescription.description
@@ -922,9 +910,9 @@ class WebRtcSessionManager(
                     startCameraHardware(currentIsFrontCamera)
                 }
                 
-                // Wait up to 3 seconds for localVideoTrack to be ready (non-blocking delay)
+                // Wait up to 500ms for localVideoTrack to be ready
                 var attempts = 0
-                while (localVideoTrack == null && attempts < 30) {
+                while (localVideoTrack == null && attempts < 5) {
                     kotlinx.coroutines.delay(100)
                     attempts++
                 }
@@ -1163,40 +1151,47 @@ class WebRtcSessionManager(
             signalingClient = null
         } catch (_: Exception) {}
 
-        executor.submit {
-            try {
-                videoCapturer?.stopCapture()
-                videoCapturer?.dispose()
-                videoCapturer = null
+        try {
+            val future = executor.submit {
+                try {
+                    videoCapturer?.stopCapture()
+                    videoCapturer?.dispose()
+                    videoCapturer = null
 
-                surfaceTextureHelper?.dispose()
-                surfaceTextureHelper = null
+                    surfaceTextureHelper?.dispose()
+                    surfaceTextureHelper = null
 
-                localVideoTrack?.dispose()
-                localVideoTrack = null
+                    localVideoTrack?.dispose()
+                    localVideoTrack = null
 
-                localAudioTrack?.dispose()
-                localAudioTrack = null
+                    localAudioTrack?.dispose()
+                    localAudioTrack = null
 
-                localVideoSource?.dispose()
-                localVideoSource = null
+                    localVideoSource?.dispose()
+                    localVideoSource = null
 
-                localAudioSource?.dispose()
-                localAudioSource = null
+                    localAudioSource?.dispose()
+                    localAudioSource = null
 
-                dataChannel?.close()
-                dataChannel?.dispose()
-                dataChannel = null
+                    dataChannel?.close()
+                    dataChannel?.dispose()
+                    dataChannel = null
 
-                peerConnection?.close()
-                peerConnection?.dispose()
-                peerConnection = null
+                    peerConnection?.close()
+                    peerConnection?.dispose()
+                    peerConnection = null
 
-                peerConnectionFactory?.dispose()
-                peerConnectionFactory = null
-            } catch (e: Exception) {
-                Log.w(TAG, "Error releasing WebRTC resources", e)
+                    peerConnectionFactory?.dispose()
+                    peerConnectionFactory = null
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error releasing WebRTC resources", e)
+                }
             }
+            try {
+                future.get(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+            } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Error submitting release to executor", e)
         }
     }
 

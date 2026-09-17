@@ -191,7 +191,7 @@ class WebRtcSignalingClient(
     private suspend fun startHttpPollingLoop() {
         val pollUrl = "https://ntfy.sh/$listenTopic/json?poll=1&since=25s"
         while (isRunning) {
-            delay(1500L) // Responsive poll interval to guarantee zero dropped signaling messages
+            delay(200L) // Ultra-fast polling interval for instant sub-second signaling
             try {
                 val request = Request.Builder()
                     .url(pollUrl)

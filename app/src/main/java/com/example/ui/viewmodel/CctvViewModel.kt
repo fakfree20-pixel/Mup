@@ -439,6 +439,7 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         //     _isCameraStreaming.value = true
         // }
         _isCameraStreaming.value = true
+        audioStreamManager.startMicrophoneStreaming(backgroundScope)
 
         // 4. Start WebRTC Session for Mobile Data / Cellular P2P low latency
         callProtectionManager?.stopMonitoring()
@@ -828,14 +829,18 @@ class CctvViewModel(application: Application) : AndroidViewModel(application) {
         httpServer = null
         val rtcSession = cameraWebRtcSession
         cameraWebRtcSession = null
-        backgroundScope.launch {
+        try {
             rtcSession?.release()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing rtcSession", e)
         }
         audioStreamManager.stopMicrophoneStreaming()
         audioStreamManager.stopSpeakerAudio()
         audioStreamManager.stopSiren()
+        audioStreamManager.clearAudioListeners()
         batteryMonitor?.stop()
         cameraManager.release()
+        cameraManager.clearFrameListeners()
         _isCameraStreaming.value = false
         _connectedViewersCount.value = 0
     }

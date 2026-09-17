@@ -54,6 +54,10 @@ class AudioStreamManager(private val context: Context) {
         audioListeners.remove(listener)
     }
 
+    fun clearAudioListeners() {
+        audioListeners.clear()
+    }
+
     @SuppressLint("MissingPermission")
     fun startMicrophoneStreaming(scope: CoroutineScope) {
         if (isRecording) return

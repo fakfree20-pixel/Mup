@@ -46,9 +46,8 @@ fun WebRtcVideoPlayer(
             isFirstFrameRendered = false
             showReconnectPrompt = false
         } else {
-            // Auto-reveal surface after 2.5s once video track is attached
-            // so driver quirks don't keep the loading screen up permanently
-            delay(2500)
+            // Instantly reveal surface after 100ms once video track arrives
+            delay(100)
             isFirstFrameRendered = true
             delay(5000)
             if (!isFirstFrameRendered) {
@@ -98,21 +97,15 @@ fun WebRtcVideoPlayer(
             update = { renderer ->
                 renderer.setMirror(isMirror)
                 val attachedTrack = trackRef.get()
-                if (videoTrack != null && attachedTrack != videoTrack) {
-                    try {
-                        attachedTrack?.removeSink(renderer)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error removing old sink: ${e.message}")
-                    }
+                if (videoTrack != null) {
                     try {
                         videoTrack.setEnabled(true)
                         videoTrack.addSink(renderer)
                         trackRef.set(videoTrack)
-                        Log.d(TAG, "Attached VideoTrack in update block")
                     } catch (e: Exception) {
                         Log.e(TAG, "Error attaching sink in update: ${e.message}")
                     }
-                } else if (videoTrack == null && attachedTrack != null) {
+                } else if (attachedTrack != null) {
                     try {
                         attachedTrack.removeSink(renderer)
                         trackRef.set(null)

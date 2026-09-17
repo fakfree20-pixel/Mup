@@ -80,6 +80,10 @@ class CameraManager(private val context: Context) {
         frameListeners.remove(listener)
     }
 
+    fun clearFrameListeners() {
+        frameListeners.clear()
+    }
+
     fun startCamera(
         lifecycleOwner: LifecycleOwner,
         previewView: PreviewView? = null,
